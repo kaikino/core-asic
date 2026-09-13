@@ -9,15 +9,24 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-This project is a programmable, general-purpose protocol emulator.  Its final
-form has two deterministic PIO engines that execute small programs to sample
-and drive GPIO pins with cycle-level timing.  The initial revision only brings
-up the clock/reset path and keeps every bidirectional pin high impedance.
+This project is a programmable, general-purpose protocol emulator. Two
+deterministic PIO engines execute 16-bit programs to sample and drive GPIO
+pins with cycle-level timing. Programs arrive as 32-bit MSB-first frames on
+`CFG_SCK`, `CFG_MOSI`, and active-low `CFG_CS_N`; `CFG_MISO` exposes status.
+
+Command `0x2` writes `{engine, address, instruction}` while that engine is
+stopped; command `0x3` starts/stops engines. The ISA, assembler, and a UART
+example are in `tools/proto_asm.py` and `examples/uart_tx.pio`.
+
+Both engines may read any GPIO. If they concurrently request push-pull drive
+of the same GPIO, the pin becomes high impedance and a sticky collision flag
+is recorded.
 
 ## How to test
 
-Hold reset low, then release it. `uo[0]` becomes high after the first clock.
-All `uio` pins remain inputs in this milestone.
+Hold reset low, release it, load instructions, then start an engine. `uo[7]`
+becomes high after the first clock. `uio` pins remain inputs unless a running
+PIO program explicitly enables them.
 
 ## External hardware
 
