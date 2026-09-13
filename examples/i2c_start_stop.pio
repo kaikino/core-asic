@@ -1,0 +1,12 @@
+# I2C start/stop fragment: GPIO0=SDA, GPIO1=SCL; external pull-ups required.
+# Only zeros are actively driven; output-enable selects open-drain assertion.
+movi r0, 0x00
+movi r1, 0x03
+write
+delay 0x3f
+movi r1, 0x02
+write
+delay 0x3f
+movi r1, 0x00
+write
+halt

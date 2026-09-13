@@ -15,8 +15,10 @@ pins with cycle-level timing. Programs arrive as 32-bit MSB-first frames on
 `CFG_SCK`, `CFG_MOSI`, and active-low `CFG_CS_N`; `CFG_MISO` exposes status.
 
 Command `0x2` writes `{engine, address, instruction}` while that engine is
-stopped; command `0x3` starts/stops engines. The ISA, assembler, and a UART
-example are in `tools/proto_asm.py` and `examples/uart_tx.pio`.
+stopped; command `0x3` starts/stops engines. The ISA, assembler, and example
+programs are in `tools/proto_asm.py` and `examples/`. The library includes
+UART timing, SPI clocking, I2C open-drain start/stop, and a two-cycle
+Manchester symbol for a 40 MHz 10 Mbit/s Ethernet line-interface experiment.
 
 Both engines may read any GPIO. If they concurrently request push-pull drive
 of the same GPIO, the pin becomes high impedance and a sticky collision flag
@@ -32,4 +34,5 @@ PIO program explicitly enables them.
 
 The final design will use the Tiny Tapeout dev-board controller as a serial
 programmer. Protocol targets may require external pull-ups, level translation,
-or an Ethernet line-interface/magnetics daughterboard.
+or an Ethernet line-driver, receive comparator, and magnetics daughterboard.
+The chip intentionally does not drive a 10BASE-T cable directly.

@@ -1,0 +1,8 @@
+# Manchester symbol fragment for a 40 MHz system clock (two clocks/bit).
+# GPIO0 is the digital TX symbol sent to an external 10BASE-T line interface.
+movi r1, 0x01
+movi r0, 0x00
+write
+movi r0, 0x01
+write
+halt

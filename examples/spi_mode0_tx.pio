@@ -1,0 +1,11 @@
+# SPI mode-0 transmitter fragment: GPIO0=MOSI, GPIO1=SCK.
+movi r1, 0x03
+movi r0, 0x00
+write
+delay 0x01
+movi r0, 0x03
+write
+delay 0x01
+movi r0, 0x00
+write
+halt
