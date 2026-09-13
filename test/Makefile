@@ -6,7 +6,7 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = tt_um_kaikino_protocol_emu.sv
+PROJECT_SOURCES = tt_um_kaikino_protocol_emu.sv proto_cfg_serial.sv
 
 ifneq ($(GATES),yes)
 
