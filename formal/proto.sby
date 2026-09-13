@@ -1,0 +1,32 @@
+# SymbiYosys job for the protocol emulator's safety properties (see the
+# `ifdef FORMAL` block at the end of src/tt_um_kaikino_protocol_emu.sv).
+#   sby -f formal/proto.sby prove   # k-induction proof
+#   sby -f formal/proto.sby bmc     # bounded check, deeper
+[tasks]
+prove
+bmc
+
+[options]
+prove: mode prove
+prove: depth 6
+bmc: mode bmc
+bmc: depth 24
+
+[engines]
+smtbmc z3
+
+[script]
+read_verilog -formal -sv proto_pio_engine.sv
+read_verilog -formal -sv proto_cfg_serial.sv
+read_verilog -formal -sv proto_program_ram.sv
+read_verilog -formal -sv proto_trace_ram.sv
+read_verilog -formal -sv -DFORMAL tt_um_kaikino_protocol_emu.sv
+prep -top tt_um_kaikino_protocol_emu
+async2sync
+
+[files]
+../src/proto_pio_engine.sv
+../src/proto_cfg_serial.sv
+../src/proto_program_ram.sv
+../src/proto_trace_ram.sv
+../src/tt_um_kaikino_protocol_emu.sv

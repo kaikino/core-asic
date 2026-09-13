@@ -1,47 +1,24 @@
-# Sample testbench for a Tiny Tapeout project
+# Verification
 
-This is a sample testbench for a Tiny Tapeout project. It uses [cocotb](https://docs.cocotb.org/en/stable/) to drive the DUT and check the outputs.
-See below to get started or for more information, check the [website](https://tinytapeout.com/hdl/testing/).
+## cocotb suite (`make`)
 
-## Setting up
-
-1. Edit [Makefile](Makefile) and modify `PROJECT_SOURCES` to point to your Verilog files.
-2. Edit [tb.v](tb.v) and replace `tt_um_example` with your module name.
-
-## How to run
-
-To run the RTL simulation:
+`test_core.py`, `test_protocols.py`, `test_ethernet.py` and `test_random.py`
+run under cocotb 2.0 with Icarus Verilog.  `proto_host.py` bit-bangs the SPI
+host link and keeps the Python reference model (`tools/proto_ref.py`) in
+lock-step with the RTL: after every clock it compares `uio_out`, `uio_oe`,
+`uo_out[7:1]` and the timestamp, and at the end of a test the status word and
+the trace buffer.  `protocols.py` holds independent UART/SPI/I2C peers and a
+Manchester decoder that check the pin waveforms themselves.
 
 ```sh
-make -B
+make                       # everything
+make COCOTB_TEST_MODULES=test_protocols
+RANDOM_SEEDS=20 RANDOM_CYCLES=5000 make COCOTB_TEST_MODULES=test_random
+make GATES=yes             # gate-level netlist (copy it to gate_level_netlist.v)
 ```
 
-To run gatelevel simulation, first harden your project and copy `../runs/wokwi/results/final/verilog/gl/{your_module_name}.v` to `gate_level_netlist.v`.
+## Other checks
 
-Then run:
-
-```sh
-make -B GATES=yes
-```
-
-If you wish to save the waveform in VCD format instead of FST format, edit tb.v to use `$dumpfile("tb.vcd");` and then run:
-
-```sh
-make -B FST=
-```
-
-This will generate `tb.vcd` instead of `tb.fst`.
-
-## How to view the waveform file
-
-Using GTKWave
-
-```sh
-gtkwave tb.fst tb.gtkw
-```
-
-Using Surfer
-
-```sh
-surfer tb.fst
-```
+* `make smoke` runs the plain-Verilog smoke benches (no cocotb required).
+* `python -m pytest test_assembler.py` tests assembler, disassembler and model.
+* `sby -f ../formal/proto.sby` proves the pin-safety properties.

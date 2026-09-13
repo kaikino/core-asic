@@ -298,5 +298,45 @@ module tt_um_kaikino_protocol_emu #(
 
   assign uo_out[7:1] = uo_target;
 
+`ifdef FORMAL
+  // ------------------------------------------------------------------
+  // Safety properties checked with SymbiYosys (formal/proto.sby).
+  // ------------------------------------------------------------------
+  reg f_past_valid;
+  initial f_past_valid = 1'b0;
+  initial assume(!rst_n);
+  always @(posedge clk) begin
+    f_past_valid <= 1'b1;
+    if (f_past_valid) assume(rst_n);
+    if (rst_n) begin
+      // P1: a contested GPIO is never driven by anybody.
+      assert((uio_oe & coll_uio) == 8'd0);
+      // P2: a GPIO is only driven with the host's permission or by the host.
+      assert((uio_oe & ~(perm_uio[0] | perm_uio[1] | host_uio_oe)) == 8'd0);
+      // P3: an engine that is not running never enables an output.
+      assert(e_running[0] || (e_uio_oe[0] == 8'd0 && e_uo_oe[0] == 7'd0));
+      assert(e_running[1] || (e_uio_oe[1] == 8'd0 && e_uo_oe[1] == 7'd0));
+      // P4: the capture bookkeeping never exceeds the buffer.
+      assert(trace_count <= TRACE_DEPTH);
+      // P5: program memory is only written while the engine is stopped.
+      assert(!prog_we[0] || !e_running[0] || eng_stop[0] || $past(!e_running[0]));
+      assert(!prog_we[1] || !e_running[1] || eng_stop[1] || $past(!e_running[1]));
+      if (f_past_valid && $past(rst_n)) begin
+        // P6: a drive collision latches the sticky fault on the next clock
+        //     unless that same clock carried the host's clear request.
+        if ($past(|coll_uio || |coll_uo) &&
+            !$past(cfg_request && cmd == CMD_RUN && cfg_word[4]))
+          assert(fault_collision);
+        // P7: a program write can only follow a PROGRAM frame.
+        if (prog_we[0] || prog_we[1])
+          assert($past(cfg_request && cmd == CMD_PROGRAM));
+        // P8: the timestamp is free running unless the host resets it.
+        if (!$past(cfg_request && cmd == CMD_RUN && cfg_word[5]))
+          assert(timestamp == $past(timestamp) + 16'd1);
+      end
+    end
+  end
+`endif
+
   wire _unused = &{ena, CMD_NOP, cfg_word[27:24], cfg_word[18:0], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
 endmodule

@@ -14,3 +14,7 @@ test/gate_level_netlist.v
 .work/
 __pycache__/
 *.pyc
+/tt
+formal/proto_prove/
+formal/proto_bmc/
+formal/*.log
