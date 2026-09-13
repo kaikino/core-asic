@@ -3,7 +3,7 @@ project:
   title:        "Programmable Protocol Emulator"      # Project title
   author:       "kaikino"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Dual-engine programmable GPIO protocol emulator"
+  description:  "Dual-engine programmable PIO protocol emulator with safe shared GPIO and trace capture"
   language:     "SystemVerilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     40000000
 
@@ -18,6 +18,10 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "tt_um_kaikino_protocol_emu.sv"
+    - "proto_pio_engine.sv"
+    - "proto_cfg_serial.sv"
+    - "proto_program_ram.sv"
+    - "proto_trace_ram.sv"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
@@ -40,7 +44,7 @@ pinout:
   uo[4]: "TARGET_OUT3"
   uo[5]: "TARGET_OUT4"
   uo[6]: "TARGET_OUT5"
-  uo[7]: "STATUS"
+  uo[7]: "TARGET_OUT6"
 
   # Bidirectional pins
   uio[0]: "GPIO0"
