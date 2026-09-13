@@ -1,0 +1,15 @@
+; Bring-up program: toggles all eight GPIOs and mirrors the four sample-only
+; inputs onto TARGET_OUT0..3, tracing every change of the inputs.
+        movi  r1, 0xff
+        out   r1, UIO_OE
+        movi  r1, 0x0f
+        out   r1, UO_OE, 0x0f
+loop:   movi  r0, 0xff
+        out   r0, UIO
+        delay 10
+        movi  r0, 0x00
+        out   r0, UIO
+        delay 10
+        in    r2, AUX
+        out   r2, UO, 0x0f
+        jmp   loop

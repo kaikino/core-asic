@@ -1,11 +1,20 @@
 `default_nettype none
 
-// Small circular event store. Each entry is {timestamp[7:0], source, data[6:0]}.
-module proto_trace_ram (
-    input wire clk, input wire we, input wire [4:0] waddr,
-    input wire [15:0] wdata, input wire [4:0] raddr, output wire [15:0] rdata
+// Circular capture store.  Entry: {timestamp[15:0], kind[1:0], engine, data[12:0]}.
+module proto_trace_ram #(
+    parameter integer DEPTH = 32,
+    parameter integer AW    = 5
+) (
+    input  wire          clk,
+    input  wire          we,
+    input  wire [AW-1:0] waddr,
+    input  wire [31:0]   wdata,
+    input  wire [AW-1:0] raddr,
+    output wire [31:0]   rdata
 );
-  reg [15:0] mem [0:31];
-  always @(posedge clk) if (we) mem[waddr] <= wdata;
+  reg [31:0] mem [0:DEPTH-1];
+  always @(posedge clk) begin
+    if (we) mem[waddr] <= wdata;
+  end
   assign rdata = mem[raddr];
 endmodule
