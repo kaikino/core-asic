@@ -11,10 +11,11 @@ the trace buffer.  `protocols.py` holds independent UART/SPI/I2C peers and a
 Manchester decoder that check the pin waveforms themselves.
 
 ```sh
+cd test                    # the Makefile resolves paths from $PWD
 make                       # everything
 make COCOTB_TEST_MODULES=test_protocols
 RANDOM_SEEDS=20 RANDOM_CYCLES=5000 make COCOTB_TEST_MODULES=test_random
-make GATES=yes             # gate-level netlist (copy it to gate_level_netlist.v)
+cp ../runs/wokwi/final/nl/*.nl.v gate_level_netlist.v && PDK_ROOT=... make GATES=yes   # gate level
 ```
 
 ## Other checks

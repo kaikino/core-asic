@@ -16,6 +16,7 @@ microprograms in `examples/`, not fixed blocks.
 | Pins | 8 bidirectional GPIO, 4 sample-only inputs, 7 drive-only outputs, 4 host-link pins |
 | Trace | 32 entries x 32 bits, 16-bit timestamps, trigger + pin-change capture |
 | Host link | synchronous SPI mode 0, 32-bit frames, register readback on MISO |
+| Sign-off (8x4, 40 MHz) | setup slack +8.2 ns slow corner, hold met, 0 DRC/LVS/antenna, 53 % utilisation; see `docs/signoff.md` |
 
 ## Layout
 
