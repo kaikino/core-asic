@@ -1,6 +1,6 @@
 # Tapeout sign-off record
 
-Recorded on 2026-09-13 for commit `HEAD` of this repository, CMOS5L flow
+Recorded on 2026-09-13/14 for the sign-off commit of this repository, CMOS5L flow
 (LibreLane 3.0.0rc1, IHP-Open-PDK `dev` + ihp-sg13cmos5l `ae76139`), tile
 allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 
@@ -16,7 +16,8 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | Synthesis | Yosys (LibreLane) | 25 790 cells, 505 453 um2 before P&R buffering; 5 629 flops; 0 check errors |
 | Place and route | OpenROAD (LibreLane) | routed, 0 routing DRC errors (5 iterations), 0 antenna violations after 114 diodes |
 | Timing | OpenSTA, nom_typ / min / max corners | setup and hold met at every corner, TNS 0 (see below) |
-| DRC | KLayout (CMOS5L rule deck as patched by the TT action) | 0 errors (Magic DRC in flow); KLayout precheck DRC: __KLDRC__ |
+| DRC | Magic (flow step 62) | 0 errors, 0 illegal overlaps |
+| Precheck | tt-support-tools `precheck.py` (KLayout DRC, pin, boundary, layer checks) | cell-name and analog-pin checks pass; the KLayout checks did not complete locally (the Docker KLayout ran the CMOS5L deck for 6 h without finishing and the native build was blocked by Gatekeeper); left to the CI precheck job |
 | LVS | netgen (flow step 66) | 0 device/net/pin mismatches |
 | Gate-level simulation | cocotb on the final netlist with CMOS5L cell models | 11/11 pass on `final/nl` netlist (`make -C test GATES=yes`, 297 s) |
 | FPGA bitstream | Yosys + nextpnr-ice40 (TT ASIC-sim UP5K board) | builds: 2 008 / 5 280 logic cells (38 %), 4 block RAMs, Fmax 15.5 MHz (board clock 12 MHz) |
