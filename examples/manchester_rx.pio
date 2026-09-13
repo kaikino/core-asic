@@ -1,0 +1,40 @@
+; 10 Mbit/s Manchester decoder on TARGET_IN0 at 40 MHz (four samples per bit).
+; The line idles low and the preamble starts with a 0 bit whose first half is
+; high, so the first rising edge is a bit boundary.  Skipping two clocks and
+; then sampling every four clocks reads the second half of every bit, which is
+; the bit value.  Every eight samples a byte is traced; the host finds the
+; 0xD5 start delimiter in the bit stream and re-aligns the payload.
+        wait  RISE, IN0
+        delay 1
+blk:    shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        nop
+        nop
+        nop
+        shin_msb r0, IN0
+        trace r0
+        nop
+        jmp   blk

@@ -1,0 +1,72 @@
+; 10 Mbit/s Manchester (IEEE 802.3 polarity: 0 = high->low, 1 = low->high)
+; from a 40 MHz clock: every half bit is exactly two instructions.
+; TARGET_OUT0 carries the symbol, TARGET_OUT1 is TX_EN for the line driver.
+;
+; Each byte is an 8-word two-bits-per-iteration loop.  SHOUT_MSB rotates the
+; data register so a byte survives its own transmission; the loop counter is
+; the number of bit pairs, so the 7-byte preamble is one loop of 28.  The two
+; spare slots per iteration preload the *other* register pair for the next
+; byte, so the byte boundary costs no clocks.  A frame here is preamble, SFD
+; and a short immediate payload; the host restarts the engine per frame.
+        movi  r0, 0x55
+        movi  r3, 28                 ; 7 preamble bytes = 28 bit pairs
+        movi  r1, 0xD5
+        movi  r2, 4
+        setp  UO_OE, 0, 1
+        setp  UO_OE, 1, 1
+        setp  UO, 1, 1               ; TX_EN
+pre:    shout_msb r0, UO, 0, INV     ; first half = ~bit
+        nop
+        setp  UO, 0, C               ; second half = bit
+        nop
+        shout_msb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r3, pre
+sfd:    shout_msb r1, UO, 0, INV     ; 0xD5
+        movi  r0, 0x12               ; payload byte 0
+        setp  UO, 0, C
+        movi  r3, 4
+        shout_msb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r2, sfd
+p0:     shout_msb r0, UO, 0, INV
+        movi  r1, 0x34               ; payload byte 1
+        setp  UO, 0, C
+        movi  r2, 4
+        shout_msb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r3, p0
+p1:     shout_msb r1, UO, 0, INV
+        movi  r0, 0x56               ; payload byte 2
+        setp  UO, 0, C
+        movi  r3, 4
+        shout_msb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r2, p1
+p2:     shout_msb r0, UO, 0, INV
+        movi  r1, 0x78               ; payload byte 3
+        setp  UO, 0, C
+        movi  r2, 4
+        shout_msb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r3, p2
+p3:     shout_msb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_msb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r2, p3
+        nop
+        setp  UO, 0, 1               ; TP_IDL: hold high two bit times
+        delay 6
+        setp  UO, 1, 0               ; TX_EN off
+        setp  UO, 0, 0
+        done
+        halt

@@ -1,0 +1,10 @@
+; 10BASE-T normal link pulse: a 100 ns high pulse on TARGET_OUT0 every 16 ms
+; (40 MHz: 4 clocks high, 157 x 4082 clocks between pulses).
+        setp  UO_OE, 0, 1
+loop:   setp  UO, 0, 1
+        delay 2
+        setp  UO, 0, 0
+        movi  r2, 157
+gap:    delay 255*16
+        djnz  r2, gap
+        jmp   loop
