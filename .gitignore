@@ -18,3 +18,9 @@ __pycache__/
 formal/proto_prove/
 formal/proto_bmc/
 formal/*.log
+test/fpga_netlist.v
+test/fpga_synth.log
+build/
+src/_tt_fpga_top.v
+formal/proto*/
+test/results*.xml

@@ -183,7 +183,10 @@ module tt_um_kaikino_protocol_emu #(
   // ------------------------------------------------------------------
   // Readback multiplexer (the link captures it while CFG_CS_N is high).
   // ------------------------------------------------------------------
-  wire [31:0] status_word = {VERSION, 2'd0, trace_count,
+  /* verilator lint_off WIDTHEXPAND */
+  wire [5:0]  trace_entries = trace_count;   // zero-extended for the status word
+  /* verilator lint_on WIDTHEXPAND */
+  wire [31:0] status_word = {VERSION, 2'd0, trace_entries,
                              trace_full, trace_overflow, triggered, armed,
                              mbox_rx_pending[1], mbox_rx_pending[0], mbox_tx_valid[1], mbox_tx_valid[0],
                              e_fault_illegal[1], e_fault_illegal[0], fault_perm, fault_collision,

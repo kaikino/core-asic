@@ -1,32 +1,58 @@
 # Programmable Protocol Emulator ASIC
 
-An open-source, reprogrammable GPIO protocol emulator for Tiny Tapeout IHP
-CMOS5L. The project is developed in small verified commits. See
-[`docs/info.md`](docs/info.md) for the current hardware interface.
+An open-source, reprogrammable GPIO protocol emulator for Tiny Tapeout on
+IHP's CMOS5L (130 nm) process, built for the Jane Street protocol-emulator
+challenge.  Two deterministic PIO engines execute 16-bit microprograms with
+cycle-exact timing, share the pins safely, and stream events into a
+timestamped trace buffer.  UART, SPI, I2C and 10 Mbit/s Manchester are
+microprograms in `examples/`, not fixed blocks.
 
-Design an open-source, general-purpose protocol emulator ASIC.
+| | |
+|---|---|
+| Process / flow | IHP SG13CMOS5L, Tiny Tapeout LibreLane flow (`tt-gds-action@ihp-cmos5l`) |
+| Tile allocation | 8x4 (`info.yaml`); local sign-off at 8x4 with `flow/harden.sh` |
+| Clock | 40 MHz (25 ns) |
+| Engines | 2 x (128 x 16 program words, 4 registers, carry, 12-bit delay) |
+| Pins | 8 bidirectional GPIO, 4 sample-only inputs, 7 drive-only outputs, 4 host-link pins |
+| Trace | 32 entries x 32 bits, 16-bit timestamps, trigger + pin-change capture |
+| Host link | synchronous SPI mode 0, 32-bit frames, register readback on MISO |
 
-Hardware protocols like UART, SPI, and I2C are simple enough that people routinely “bit-bang” them: toggle pins from software with careful timing instead of using a dedicated peripheral. A protocol emulator is a small chip built to do exactly that: a tiny CPU with an instruction set designed for reading pins, writing pins, counting cycles, and hitting timing precisely enough that you can implement a real protocol in firmware rather than in fixed logic. Something like that is a useful tool for hardware debugging and reverse engineering, which is a good part of what we do.
+## Layout
 
-The hard part is flexibility. The goal isn’t to put a UART block, an SPI block, and an I2C block on one die and call it done. Your chip should be reprogrammable enough to support new protocols after fabrication, within its timing and I/O constraints. For inspiration, look at the PIO state machines on the RP2040 or the PRU cores on TI’s Sitara parts, and consider what you’d do differently.
+```
+src/        RTL (SystemVerilog): top level, PIO engine, host link, memories
+tools/      proto_asm.py (assembler/disassembler), proto_ref.py (cycle-accurate model)
+examples/   microprograms: uart_tx/rx, spi_master, i2c_master, manchester_tx/rx, link_pulse
+test/       cocotb suite (lock-step RTL vs model), Verilog smoke tests, pytest unit tests
+formal/     SymbiYosys safety properties (k-induction proof and BMC)
+flow/       PDK install, local hardening, 8x4 tile-template generator
+docs/       info.md (datasheet), isa.md (ISA + host protocol), signoff.md (results)
+```
 
-Start with UART, SPI, and I2C.
-Stretch goals include low-speed USB and 10Mbit Ethernet.
-Other interesting protocols to consider: JTAG, SWD, PS/2, CAN bus
-If you have access to an FPGA, consider using it to test your RTL before the ASIC flow.
-Show us anything else your architecture makes possible that we haven’t thought of.
-At Jane Street, we use Hardcaml to generate the RTL for our FPGA and ASIC designs. We are excited to see the languages and verification techniques you use, including formal methods, random constrained tests, AI-assisted verification, and more. As AI-assisted chip design becomes more common, we believe verification will be an extremely important aspect of the ASIC design flow going forwards.
+## Quick start
 
-The rules
-Process: We’re targeting IHP’s 130nm CMOS5L process through our friends at Tiny Tapeout. Start with the CMOS5L Verilog template, which takes you from RTL to GDS. Set the tile size in info.yaml to 8x4.
-Area: Our planned maximum is 8×4 Tiny Tapeout tiles per design.
-Open source: Your submission should be open source so others can use and build on it. Unlike the reverse-engineering puzzle, there’s no need to keep your work hidden until the deadline, so feel free to build in public!
-Teams: This is a much bigger project than the puzzle, so we strongly recommend working in teams.
-Deadline: Submit your design by January 18th, 2027.
-Prize: We’ll pay to tape out the most novel designs on a Tiny Tapeout shuttle. We’re targeting the March 2027 CMOS5L shuttle, subject to the foundry schedule. Winners will receive chips and dev boards back after fabrication, so you can test your design in silicon.
-How much fits?
-An 8x4 allocation is 32 tiles. At approximately 200um × 150um per tile, that’s about 1 mm² of nominal tile area. As a rough estimate, budget for about 1K logic cells per tile. You may need to get creative to fit the functionality you want.
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r test/requirements.txt
+make -C test            # cocotb suite (iverilog)
+make -C test smoke      # plain Verilog smoke tests
+python -m pytest test/test_assembler.py
+sby -f formal/proto.sby # formal proof (yosys + sby + z3)
+python tools/proto_asm.py -l examples/uart_tx.pio   # listing
+```
 
-For instruction memory, SRAM can be more area-efficient than flip-flops. Tiny Tapeout has examples of SRAM running on this process node you can reference.
+Hardening locally (Docker, LibreLane 3.0.0rc1) is described in
+`docs/signoff.md`.
 
-Run synthesis early, check the mapped cell area, and leave room for clock-tree buffers and routing. Then run the full place-and-route flow and check timing. A design that looks small enough after synthesis can still be difficult to route or too slow at your chosen clock frequency.
+## Design notes
+
+* Every instruction takes exactly one clock; `DELAY` and `WAIT` stall
+  deterministically, so the protocol timing is a property of the program.
+* `shout_*` rotates a register and writes one bit per instruction; with a
+  40 MHz clock that is enough for two instructions per Manchester half bit.
+* A pin enabled by both engines in the same clock is left high impedance and
+  a sticky fault is latched; host-set permission masks bound each engine.
+* The CMOS5L slim PDK ships no SRAM macro, so program memories are flop
+  arrays behind an SRAM-shaped wrapper (`src/proto_program_ram.sv`).
+
+See `docs/isa.md` for the instruction set and host protocol.

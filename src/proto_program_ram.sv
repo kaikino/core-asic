@@ -19,5 +19,14 @@ module proto_program_ram #(
   always @(posedge clk) begin
     if (we) mem[waddr] <= wdata;
   end
+`ifdef SYNTH
+  // iCE40 build (tt_fpga.py defines SYNTH): read on the falling edge so the
+  // array maps to block RAM yet still looks asynchronous to the rising-edge
+  // logic, which keeps the FPGA cycle-for-cycle identical to the ASIC.
+  reg [15:0] rdata_q;
+  always @(negedge clk) rdata_q <= mem[raddr];
+  assign rdata = rdata_q;
+`else
   assign rdata = mem[raddr];
+`endif
 endmodule

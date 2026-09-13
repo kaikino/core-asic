@@ -8,7 +8,14 @@ TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
 PROJECT_SOURCES = tt_um_kaikino_protocol_emu.sv proto_cfg_serial.sv proto_program_ram.sv proto_pio_engine.sv proto_trace_ram.sv
 
-ifneq ($(GATES),yes)
+ifeq ($(FPGA),yes)
+
+# iCE40 post-synthesis netlist simulation (make fpga_netlist first):
+SIM_BUILD				= sim_build/fpga
+VERILOG_SOURCES += $(shell yosys-config --datdir)/ice40/cells_sim.v
+VERILOG_SOURCES += $(PWD)/fpga_netlist.v
+
+else ifneq ($(GATES),yes)
 
 # RTL simulation:
 SIM_BUILD				= sim_build/rtl
@@ -46,6 +53,11 @@ space := $(eval) $(eval)
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim
+
+# iCE40 technology-mapped netlist of the FPGA configuration (`SYNTH defined):
+fpga_netlist:
+	yosys -q -l fpga_synth.log -p "read_verilog -sv -DSYNTH $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES)); synth_ice40 -top tt_um_kaikino_protocol_emu; write_verilog -noattr fpga_netlist.v"
+.PHONY: fpga_netlist
 
 # Plain-Verilog smoke tests (no cocotb needed):  make smoke
 SMOKE_TBS = smoke_cfg_tb smoke_pio_tb

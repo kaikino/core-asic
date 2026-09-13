@@ -1,8 +1,18 @@
 name: gds
 
+# The official TinyTapeout/tt-gds-action@ihp-cmos5l flow, spelled out step by
+# step so that the 8x4 floorplan template (which the current CMOS5L support
+# tools do not ship) can be generated with flow/gen_tile_def.py before
+# hardening.  Once upstream adds 8x4, this job can go back to the one-line
+# `uses: TinyTapeout/tt-gds-action@ihp-cmos5l` form.
 on:
   push:
   workflow_dispatch:
+
+env:
+  PDK: ihp-sg13cmos5l
+  PDK_ROOT: /home/runner/pdk
+  TT_ARGS: --ihp
 
 jobs:
   gds:
@@ -13,11 +23,90 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ihp-cmos5l
-        with:
-          pdk: ihp-sg13cmos5l
+      - name: Install prerequisites
+        run: sudo apt-get update && sudo apt-get install -y librsvg2-bin pngquant
 
+      - name: Checkout tt-support-tools (CMOS5L branch)
+        uses: actions/checkout@v6
+        with:
+          repository: htfab/tt-support-tools
+          ref: cmos
+          path: tt
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install tt-support-tools dependencies
+        run: pip install -r tt/requirements.txt
+
+      - name: Add the 8x4 floorplan template
+        run: |
+          python3 flow/gen_tile_def.py --check tt/tech/ihp-sg13cmos5l/def
+          python3 flow/gen_tile_def.py tt/tech/ihp-sg13cmos5l/def/tt_block_8x2_pgvdd.def tt/tech/ihp-sg13cmos5l/def/tt_block_8x4_pgvdd.def
+          grep -q '^8x4:' tt/tech/ihp-sg13cmos5l/tile_sizes.yaml || echo '8x4: "0 0 1724.16 710.64"' >> tt/tech/ihp-sg13cmos5l/tile_sizes.yaml
+
+      - name: Fetch verilog and build config
+        run: ./tt/tt_tool.py --create-user-config $TT_ARGS
+
+      - name: Install ihp-sg13cmos5l PDK
+        run: flow/install_pdk.sh
+
+      - name: Install LibreLane
+        run: pip install librelane==3.0.0rc1
+
+      - name: Make GDS with LibreLane
+        run: ./tt/tt_tool.py --harden $TT_ARGS
+
+      - name: Linter output
+        if: always()
+        run: cat runs/wokwi/*-verilator-lint/verilator-lint.log || true
+
+      - name: Yosys warnings
+        run: ./tt/tt_tool.py --print-warnings $TT_ARGS >> $GITHUB_STEP_SUMMARY
+
+      - name: Routing summary
+        run: ./tt/tt_tool.py --print-stats $TT_ARGS >> $GITHUB_STEP_SUMMARY
+
+      - name: Cell usage summary
+        run: ./tt/tt_tool.py --print-cell-category $TT_ARGS >> $GITHUB_STEP_SUMMARY
+
+      - name: Publish build logs
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: GDS_logs
+          path: |
+            src/*
+            runs/wokwi/*
+
+      - name: Prepare tt_submission artifact
+        run: ./tt/tt_tool.py --create-tt-submission $TT_ARGS
+
+      - name: Publish tt_submission artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: tt_submission
+          path: |
+            src/*
+            docs/*
+            tt_submission/*
+            info.yaml
+            LICENSE
+
+      - name: Render PNG from GDS
+        run: './tt/tt_tool.py --create-png $TT_ARGS 2>&1 || echo "WARNING: Failed to render PNG preview from GDS; error $?"'
+
+      - name: Upload gds_render (png) artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gds_render
+          path: 'gds_render.png'
+
+  # These reuse the official actions and will pass once the upstream support
+  # tools know the 8x4 block; until then they report the tiles gap.
   precheck:
     needs: gds
     runs-on: ubuntu-24.04
@@ -41,7 +130,7 @@ jobs:
     needs: gds
     runs-on: ubuntu-24.04
     permissions:
-      pages: write # to deploy to Pages
-      id-token: write # to verify the deployment originates from an appropriate source
+      pages: write
+      id-token: write
     steps:
       - uses: TinyTapeout/tt-gds-action/viewer@ihp-cmos5l
