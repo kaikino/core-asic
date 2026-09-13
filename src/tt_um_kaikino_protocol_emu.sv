@@ -50,7 +50,6 @@ module tt_um_kaikino_protocol_emu (
   wire [7:0] pio1_data, pio1_oe;
   wire pio1_running, pio1_trace;
   reg collision_fault;
-  reg [15:0] trace_latch;
   reg [7:0] timestamp;
   reg [4:0] trace_write_ptr, trace_read_ptr;
   wire [15:0] trace_read_data;
@@ -86,7 +85,7 @@ module tt_um_kaikino_protocol_emu (
       .cfg_miso   (cfg_miso),
       .cmd_word   (cfg_word),
       .req_toggle (cfg_req_toggle),
-      .status     ({6'b0, alive, (gpio_oe_reg != 8'b0)})
+      .status_high(collision_fault)
   );
 
   always @(posedge clk or negedge rst_n) begin
@@ -104,7 +103,7 @@ module tt_um_kaikino_protocol_emu (
       pio0_stop <= 1'b0;
       prog1_we <= 1'b0; prog1_waddr <= 8'b0; prog1_wdata <= 16'b0;
       pio1_start <= 1'b0; pio1_stop <= 1'b0;
-      collision_fault <= 1'b0; trace_latch <= 16'b0;
+      collision_fault <= 1'b0;
       timestamp <= 8'b0; trace_write_ptr <= 5'b0; trace_read_ptr <= 5'b0;
     end else begin
       alive <= 1'b1;
@@ -117,8 +116,6 @@ module tt_um_kaikino_protocol_emu (
       if (drive_collision != 0) collision_fault <= 1'b1;
       timestamp <= timestamp + 1'b1;
       if (trace_we) trace_write_ptr <= trace_write_ptr + 1'b1;
-      if (pio0_trace) trace_latch <= {1'b0, prog0_pc, pio0_data[6:0]};
-      if (pio1_trace) trace_latch <= {1'b1, prog1_pc, pio1_data[6:0]};
       if (cfg_request) begin
         cfg_req_seen <= cfg_sync_1;
         if (cfg_word[31:28] == CMD_GPIO) begin
@@ -158,5 +155,5 @@ module tt_um_kaikino_protocol_emu (
                    ((pio0_data & pio0_oe & ~pio1_oe) | (pio1_data & pio1_oe & ~pio0_oe)) : gpio_data;
   assign uio_oe  = (pio0_running || pio1_running) ? ((pio0_oe ^ pio1_oe) & ~drive_collision) : gpio_oe_reg;
 
-  wire _unused = &{ena, ui_in[7:3], uio_in, 1'b0};
+  wire _unused = &{ena, alive, ui_in[7:3], uio_in, trace_read_data[15:6], 1'b0};
 endmodule

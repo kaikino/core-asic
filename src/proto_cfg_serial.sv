@@ -12,7 +12,7 @@ module proto_cfg_serial (
     output wire        cfg_miso,
     output reg [31:0] cmd_word,
     output reg         req_toggle,
-    input  wire [7:0]  status
+    input  wire        status_high
 );
   reg [31:0] shift_reg;
   reg [5:0]  bit_count;
@@ -39,6 +39,6 @@ module proto_cfg_serial (
 
   // Status is deliberately simple in this first control-plane revision: the
   // high bit is visible on MISO for host polling without another CDC path.
-  assign cfg_miso = status[7];
-  wire _unused = &{clk, 1'b0};
+  assign cfg_miso = status_high;
+  wire _unused = &{clk, shift_reg[31], 1'b0};
 endmodule

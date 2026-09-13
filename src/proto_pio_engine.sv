@@ -24,6 +24,7 @@ module proto_pio_engine (
   integer i;
 
   assign pc = program_counter;
+  wire _unused_instruction_bits = &{instruction[9:8], 1'b0};
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
