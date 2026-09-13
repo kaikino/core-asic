@@ -64,8 +64,10 @@ Pin numbers used by `WAIT`, `JPH`, `JPL` and `SHIN`:
 | A | `shout_lsb rs, TGT, bit[, INV]` | rotate `rs` right, write its old LSB |
 | B | `shl rd` / `shr rd` | shift, `C` = bit shifted out |
 | B | `shin_lsb rd, pin` / `shin_msb rd, pin` | shift the sampled pin into the MSB (LSB-first receive) or LSB |
-| C | `mov/add/sub/and/or/xor rd, rs` | ALU; `add`/`sub` set `C` (carry / borrow) |
+| C | `mov/add/sub/and/or/xor rd, rs` | ALU (`fn = imm[3:0]`); `add`/`sub` set `C` (carry / borrow) |
 | C | `movc rd` / `not rd` | `rd = C` / `rd = ~rd` |
+| C | `pop rd` | `rd` = next byte of the host data FIFO, `C` = byte was valid; in FCS mode the four bytes after the data are the CRC-32 FCS |
+| C | `crci` / `crcu rd` / `crcb rd, k` | CRC-32: initialise / fold `rd` in / `rd` = FCS byte `k` (0 = first on the wire) |
 | D | `trace imm8` / `trace rs` | write a timestamped event to the trace buffer |
 | D | `mbox rs` | post a byte to the host mailbox |
 | D | `done` | set the engine's DONE status flag |
@@ -102,6 +104,7 @@ that value is captured while `CFG_CS_N` is high, so read with two frames:
 | 6 | MBOX | `[27]` engine, `[7:0]` byte for the engine |
 | 7 | CAPTURE | `[12:0]` watched pins (bit 12 = TRIGGER_IN), `[15:13]` trigger source, `[16]` capture pin changes, `[17]` stop when full |
 | 8 | READSEL | `[2:0]` readback register |
+| 9 | FIFO | `[7:0]` byte, `[8]` push, `[9]` reset FIFO and CRC, `[10]` FCS mode (fold every popped byte into the CRC and return the FCS after the data) |
 
 Trigger sources: 0 immediately on arm, 1 TRIGGER_IN rising, 2 TRIGGER_IN
 falling, 3 engine 0 `trace`, 4 engine 1 `trace`, 5 any watched pin change.
@@ -113,8 +116,22 @@ Readback registers:
 | 0 | STATUS: `[0]` run0 `[1]` run1 `[2]` done0 `[3]` done1 `[4]` collision fault `[5]` permission fault `[6]` illegal0 `[7]` illegal1 `[8]` mbox0 unread by engine `[9]` mbox1 unread `[10]` mbox0 pending to host `[11]` mbox1 pending `[12]` armed `[13]` triggered `[14]` overflow `[15]` full `[21:16]` entries `[31:24]` version (0x10) |
 | 1 | `[7:0]` mailbox from engine 0, `[15:8]` from engine 1, `[23:16]` pc0, `[31:24]` pc1 |
 | 2 | trace entry at TRACEPTR: `[31:16]` timestamp, `[14]` pin-capture kind, `[13]` engine, `[12:0]` pins or `[7:0]` event data |
-| 3 | `[15:0]` timestamp, `[20:16]` trace write pointer |
+| 3 | `[15:0]` timestamp, `[20:16]` trace write pointer, `[21]` FCS mode, `[29:22]` FIFO level |
 | 4 | ID `0x50494F31` ("PIO1") |
+
+## Data FIFO and CRC-32
+
+The host fills a 128-byte FIFO with `FIFO` frames faster than any engine
+consumes it for slow protocols, or ahead of time for fast ones; `pop rd`
+takes the next byte in one clock, so a 10 Mbit/s Manchester program can
+stream a whole Ethernet frame (see `examples/manchester_tx.pio`).  Either
+engine may pop; if both pop in the same clock they receive the same byte.
+The CRC-32 register (reflected polynomial `0xEDB88320`, initial and final
+value `0xFFFFFFFF`, i.e. the Ethernet FCS) is updated by `crcu` or, in FCS
+mode, by every data byte popped; once the FIFO is empty the next four pops
+return the FCS least-significant byte first, which is Ethernet wire order.
+`crcb rd, k` reads the same bytes explicitly for other framings.  The CRC-32
+check value of "123456789" is `0xCBF43926`.
 
 ## Safe pin sharing
 

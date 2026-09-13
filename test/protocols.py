@@ -144,11 +144,20 @@ def manchester_decode(samples: list[int]) -> list[int]:
 
 
 def find_payload(bits: list[int], sfd: int = 0xD5) -> list[int]:
-    """Return bytes following the first SFD in an MSB-first bit list."""
-    pattern = [(sfd >> (7 - i)) & 1 for i in range(8)]
+    """Return the bytes following the first SFD in an LSB-first bit stream."""
+    pattern = [(sfd >> i) & 1 for i in range(8)]  # 10101011 on the wire
     for i in range(len(bits) - 8):
         if bits[i:i + 8] == pattern:
             rest = bits[i + 8:]
-            return [sum(b << (7 - j) for j, b in enumerate(rest[k:k + 8]))
+            return [sum(b << j for j, b in enumerate(rest[k:k + 8]))
                     for k in range(0, len(rest) - 7, 8)]
     return []
+
+
+def frame_ok(frame: list[int]) -> bool:
+    """True if the last four bytes are the CRC-32 FCS of the preceding bytes."""
+    import zlib
+    if len(frame) < 5:
+        return False
+    fcs = zlib.crc32(bytes(frame[:-4])) & 0xFFFFFFFF
+    return frame[-4:] == [(fcs >> (8 * k)) & 0xFF for k in range(4)]

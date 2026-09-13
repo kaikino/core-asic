@@ -24,7 +24,11 @@
 //                              intact after eight writes, so a register can
 //                              feed a repeating pattern with no reload.
 //  B SHIFT rd, mode, pin       0 SHL, 1 SHR, 2 SHIN_LSB, 3 SHIN_MSB
-//  C ALU   rd, rs, fn          0 MOV 1 ADD 2 SUB 3 AND 4 OR 5 XOR 6 MOVC 7 NOT
+//  C ALU   rd, rs, fn          fn = imm[3:0]: 0 MOV 1 ADD 2 SUB 3 AND 4 OR
+//                              5 XOR 6 MOVC 7 NOT 8 CRCU (fold rd into the
+//                              CRC-32) 9 CRCI (init CRC) 10 CRCB rd,k (rd =
+//                              FCS byte imm[5:4]) 11 POP rd (rd = next data
+//                              FIFO byte, C = byte was valid)
 //  D EVT   sub, imm8|rs        0 TRACE imm, 1 TRACE rs, 2 MBOX <= rs, 3 DONE
 //  E HALT                      stop and release every output enable
 //  F (illegal)                 HALT plus a sticky fault
@@ -55,7 +59,15 @@ module proto_pio_engine (
     output reg         done,
     output reg         trace_we,
     output reg  [7:0]  trace_data,
-    output reg         fault_illegal
+    output reg         fault_illegal,
+    // Shared data FIFO and CRC-32 (owned by the top level, combinational ops).
+    input  wire [7:0]  fifo_data,
+    input  wire        fifo_valid,
+    input  wire [31:0] fcs,
+    output wire        fifo_pop,
+    output wire        crc_init,
+    output wire        crc_update,
+    output wire [7:0]  crc_byte
 );
   reg [7:0]  program_counter;
   reg [11:0] delay_count;
@@ -86,6 +98,14 @@ module proto_pio_engine (
   wire [11:0] delay_val = (sub == 2'd0) ? {4'b0, imm} :
                           (sub == 2'd1) ? {4'b0, rd_val} :
                           (sub == 2'd2) ? {imm, 4'b0} : {rd_val, 4'b0};
+
+  wire       execute   = running & (delay_count == 12'd0);
+  wire       alu_op    = execute & (opcode == 4'hC);
+  assign fifo_pop   = alu_op & (imm[3:0] == 4'd11);
+  assign crc_init   = alu_op & (imm[3:0] == 4'd9);
+  assign crc_update = alu_op & (imm[3:0] == 4'd8);
+  assign crc_byte   = rd_val;
+  wire [7:0] fcs_sel   = fcs[imm[5:4]*8 +: 8];
 
   wire [7:0] setp_mask = 8'd1 << imm[2:0];
   wire       setp_base = (imm[6:5] == 2'd1) ? carry :
@@ -187,15 +207,18 @@ module proto_pio_engine (
               program_counter <= pc_next;
             end
             4'hC: begin
-              case (imm[2:0])
-                3'd0: regs[rd] <= rs_val;
-                3'd1: begin regs[rd] <= add_res[7:0]; carry <= add_res[8]; end
-                3'd2: begin regs[rd] <= sub_res[7:0]; carry <= sub_res[8]; end
-                3'd3: regs[rd] <= rd_val & rs_val;
-                3'd4: regs[rd] <= rd_val | rs_val;
-                3'd5: regs[rd] <= rd_val ^ rs_val;
-                3'd6: regs[rd] <= {7'd0, carry};
-                3'd7: regs[rd] <= ~rd_val;
+              case (imm[3:0])
+                4'd0: regs[rd] <= rs_val;
+                4'd1: begin regs[rd] <= add_res[7:0]; carry <= add_res[8]; end
+                4'd2: begin regs[rd] <= sub_res[7:0]; carry <= sub_res[8]; end
+                4'd3: regs[rd] <= rd_val & rs_val;
+                4'd4: regs[rd] <= rd_val | rs_val;
+                4'd5: regs[rd] <= rd_val ^ rs_val;
+                4'd6: regs[rd] <= {7'd0, carry};
+                4'd7: regs[rd] <= ~rd_val;
+                4'd10: regs[rd] <= fcs_sel;
+                4'd11: begin regs[rd] <= fifo_data; carry <= fifo_valid; end
+                default: ;  // 8 CRCU, 9 CRCI act through crc_update/crc_init
               endcase
               program_counter <= pc_next;
             end

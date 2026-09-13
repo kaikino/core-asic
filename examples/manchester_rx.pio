@@ -1,40 +1,41 @@
 ; 10 Mbit/s Manchester decoder on TARGET_IN0 at 40 MHz (four samples per bit).
-; The line idles low and the preamble starts with a 0 bit whose first half is
-; high, so the first rising edge is a bit boundary.  Skipping two clocks and
-; then sampling every four clocks reads the second half of every bit, which is
-; the bit value.  Every eight samples a byte is traced; the host finds the
-; 0xD5 start delimiter in the bit stream and re-aligns the payload.
+; The line idles low and the 0x55 preamble (LSB first) starts with a 1 bit,
+; so its only edges are mid-bit low-to-high and high-to-low transitions.
+; Sampling one clock after the first rising edge and then every four clocks
+; reads the second half of every bit, which is the bit value.  Bits enter
+; LSB first (Ethernet byte order).  Every eight samples a byte is traced; the
+; host finds the 10101011 start delimiter, re-aligns the payload and checks
+; the FCS.
         wait  RISE, IN0
-        delay 1
-blk:    shin_msb r0, IN0
+blk:    shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         nop
         nop
         nop
-        shin_msb r0, IN0
+        shin_lsb r0, IN0
         trace r0
         nop
         jmp   blk

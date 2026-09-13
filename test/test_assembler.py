@@ -16,7 +16,7 @@ class AssemblerTest(unittest.TestCase):
                  "delay r1", "delay 12*16", "wait RISE, GPIO5", "jmp 0x10", "djnz r0, 0x03",
                  "jph TRIG, 0x22", "jpl IN2, 0x01", "setp UO, 6, 1", "setp UIO_OE, 2, C",
                  "shout_msb r0, UO, 0, INV", "shout_lsb r2, UIO, 7", "shl r1", "shin_lsb r0, IN0",
-                 "add r0, r1", "movc r3", "not r2", "trace 0x42", "trace r1", "mbox r0", "done", "halt"]
+                 "add r0, r1", "movc r3", "not r2", "crcu r1", "crci", "crcb r2, 3", "pop r0", "trace 0x42", "trace r1", "mbox r0", "done", "halt"]
         for line in lines:
             word = assemble(line)
             self.assertEqual(assemble(disassemble(word)), word, line)
@@ -74,6 +74,26 @@ class ReferenceModelTest(unittest.TestCase):
             chip.step(0, 0)
         self.assertEqual(chip.uio_oe, 0)
         self.assertTrue(chip.fault_collision)
+
+    def test_fifo_fcs_matches_zlib(self):
+        import zlib
+        from proto_ref import cmd_fifo
+        chip = Chip()
+        data = list(range(1, 61))
+        chip.step(0, 0, Command(cmd_fifo(reset=True, fcs_mode=True)))
+        for b in data:
+            chip.step(0, 0, Command(cmd_fifo(b, push=True, fcs_mode=True)))
+        chip.step(0, 0)
+        for i, w in enumerate(assemble_program("l: pop r0\nmbox r0\njmp l").words):
+            chip.imem[0][i] = w
+        chip.step(0, 0, Command(cmd_run(start0=True)))
+        out = []
+        for _ in range(3 * 66 + 4):
+            chip.step(0, 0)
+            if chip.eng[0].pc == 1 and chip.eng[0].carry:
+                out.append(chip.eng[0].regs[0])
+        fcs = zlib.crc32(bytes(data)) & 0xFFFFFFFF
+        self.assertEqual(out, data + [(fcs >> (8 * k)) & 0xFF for k in range(4)])
 
     def test_delay_is_deterministic(self):
         eng = Engine()

@@ -14,7 +14,7 @@ from common import example, read_trace, setup  # noqa: F401
 from proto_asm import assemble_program  # noqa: F401
 from proto_ref import (  # noqa: F401
     READ_ID, READ_MBOX, READ_STATUS, READ_TIME, READ_TRACE, TRACE_DEPTH,
-    cmd_capture, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
+    cmd_capture, cmd_fifo, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
 from protocols import (  # noqa: F401
     I2cSlave, SpiSlave, UartMonitor, UartSource, find_payload, manchester_decode)
 
@@ -124,3 +124,35 @@ async def test_trigger_capture(dut):
     assert all(e & (1 << 14) for e in entries), "kind = pin capture"
     stamps = [e >> 16 for e in entries]
     assert stamps[1] - stamps[0] == 7 and stamps[2] - stamps[1] == 7
+
+
+@cocotb.test()
+async def test_fifo_and_crc(dut):
+    """Host FIFO pops, hardware FCS, and the explicit CRC-32 instructions."""
+    import zlib
+    h = await setup(dut)
+    data = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39]  # "123456789"
+    # Engine 1 pops everything into the trace: 9 bytes, then the 4 FCS bytes.
+    prog = assemble_program("l: pop r0\nmovc r1\njz r1, end\ntrace r0\njmp l\nend: done\nhalt").words
+    await h.load(1, prog)
+    await h.xfer(cmd_fifo(reset=True, fcs_mode=True))
+    for b in data:
+        await h.xfer(cmd_fifo(b, push=True, fcs_mode=True))
+    assert ((await h.read(READ_TIME)) >> 22) & 0xFF == len(data), "FIFO level readback"
+    await h.xfer(cmd_run(arm=True, start1=True))
+    status = await h.wait_idle(1)
+    assert status & 0x08, "DONE"
+    entries = await read_trace(h, (status >> 16) & 0x3F)
+    got = [e & 0xFF for e in entries]
+    fcs = zlib.crc32(bytes(data)) & 0xFFFFFFFF
+    assert got == data + [(fcs >> (8 * k)) & 0xFF for k in range(4)], [hex(x) for x in got]
+    assert fcs == 0xCBF43926, "CRC-32 check value"
+    # Explicit CRC: fold the same bytes with CRCU and read the FCS with CRCB.
+    prog = assemble_program(
+        "crci\nmovi r0, 0x31\nmovi r2, 9\nl: crcu r0\nmovi r1, 1\nadd r0, r1\ndjnz r2, l\n"
+        "crcb r3, 0\ntrace r3\ncrcb r3, 1\ntrace r3\ncrcb r3, 2\ntrace r3\ncrcb r3, 3\ntrace r3\ndone\nhalt").words
+    await h.load(0, prog)
+    await h.xfer(cmd_run(arm=True, start0=True))
+    status = await h.wait_idle(0)
+    entries = await read_trace(h, 4)
+    assert [e & 0xFF for e in entries] == [0x26, 0x39, 0xF4, 0xCB]

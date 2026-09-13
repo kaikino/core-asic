@@ -4,8 +4,9 @@ An open-source, reprogrammable GPIO protocol emulator for Tiny Tapeout on
 IHP's CMOS5L (130 nm) process, built for the Jane Street protocol-emulator
 challenge.  Two deterministic PIO engines execute 16-bit microprograms with
 cycle-exact timing, share the pins safely, and stream events into a
-timestamped trace buffer.  UART, SPI, I2C and 10 Mbit/s Manchester are
-microprograms in `examples/`, not fixed blocks.
+timestamped trace buffer.  UART, SPI, I2C and 10 Mbit/s Manchester Ethernet
+frames (with hardware CRC-32) are microprograms in `examples/`, not fixed
+blocks.
 
 | | |
 |---|---|
@@ -15,6 +16,7 @@ microprograms in `examples/`, not fixed blocks.
 | Engines | 2 x (128 x 16 program words, 4 registers, carry, 12-bit delay) |
 | Pins | 8 bidirectional GPIO, 4 sample-only inputs, 7 drive-only outputs, 4 host-link pins |
 | Trace | 32 entries x 32 bits, 16-bit timestamps, trigger + pin-change capture |
+| Data path | 128-byte host FIFO, one-clock pops, hardware CRC-32 (Ethernet FCS) |
 | Host link | synchronous SPI mode 0, 32-bit frames, register readback on MISO |
 | Sign-off (8x4, 40 MHz) | setup slack +8.2 ns slow corner, hold met, 0 DRC/LVS/antenna, 53 % utilisation; see `docs/signoff.md` |
 
@@ -50,7 +52,8 @@ Hardening locally (Docker, LibreLane 3.0.0rc1) is described in
 * Every instruction takes exactly one clock; `DELAY` and `WAIT` stall
   deterministically, so the protocol timing is a property of the program.
 * `shout_*` rotates a register and writes one bit per instruction; with a
-  40 MHz clock that is enough for two instructions per Manchester half bit.
+  40 MHz clock that is enough for two instructions per Manchester half bit,
+  and `pop` fetches the next frame byte from the host FIFO in one clock.
 * A pin enabled by both engines in the same clock is left high impedance and
   a sticky fault is latched; host-set permission masks bound each engine.
 * The CMOS5L slim PDK ships no SRAM macro, so program memories are flop

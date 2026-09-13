@@ -16,7 +16,8 @@
 module tt_um_kaikino_protocol_emu #(
     parameter integer PROG_AW     = 7,   // 128 x 16 instruction words per engine
     parameter integer TRACE_DEPTH = 32,
-    parameter integer TRACE_AW    = 5
+    parameter integer TRACE_AW    = 5,
+    parameter integer FIFO_AW     = 7    // 128-byte host-to-engine data FIFO
 ) (
     input  wire [7:0] ui_in,
     output wire [7:0] uo_out,
@@ -39,6 +40,7 @@ module tt_um_kaikino_protocol_emu #(
   localparam [3:0] CMD_MBOX     = 4'h6;  // [27] engine [7:0] data
   localparam [3:0] CMD_CAPTURE  = 4'h7;  // [12:0] watch [15:13] trigger [16] pin capture [17] stop on full
   localparam [3:0] CMD_READSEL  = 4'h8;  // [2:0] readback register
+  localparam [3:0] CMD_FIFO     = 4'h9;  // [7:0] data [8] push [9] reset [10] FCS mode
   localparam [7:0] VERSION      = 8'h10;
 
   // ------------------------------------------------------------------
@@ -92,6 +94,58 @@ module tt_um_kaikino_protocol_emu #(
 
   reg         fault_collision, fault_perm;
 
+  // ------------------------------------------------------------------
+  // Host-to-engine data FIFO with CRC-32 (Ethernet FCS) support.  Either
+  // engine may pop; a simultaneous pop hands both the same byte.  In FCS
+  // mode every data byte popped is folded into the CRC and, once the FIFO
+  // is empty, the next four pops return the frame check sequence in wire
+  // order (~crc, least significant byte first).
+  // ------------------------------------------------------------------
+  reg  [7:0]  fifo_mem [0:(1 << FIFO_AW) - 1];
+  reg  [FIFO_AW-1:0] fifo_rptr, fifo_wptr;
+  reg  [FIFO_AW:0]   fifo_count;
+  reg         fcs_mode, fcs_done;
+  reg  [1:0]  fcs_idx;
+  reg  [31:0] crc;
+  wire        fifo_empty = (fifo_count == {(FIFO_AW+1){1'b0}});
+  wire        fifo_full  = fifo_count[FIFO_AW];
+`ifdef SYNTH
+  // iCE40 build: falling-edge read maps the FIFO to block RAM (see the RAM
+  // wrappers); the ASIC array is read asynchronously.
+  reg  [7:0]  fifo_head_q;
+  always @(negedge clk) fifo_head_q <= fifo_mem[fifo_rptr];
+  wire [7:0]  fifo_head  = fifo_head_q;
+`else
+  wire [7:0]  fifo_head  = fifo_mem[fifo_rptr];
+`endif
+  wire [31:0] fcs        = ~crc;
+  wire [7:0]  fcs_byte   = fcs[fcs_idx*8 +: 8];
+  wire        fcs_avail  = fcs_mode & ~fcs_done;
+  wire        fifo_valid = ~fifo_empty | fcs_avail;
+  wire [7:0]  fifo_data  = ~fifo_empty ? fifo_head : (fcs_avail ? fcs_byte : 8'd0);
+  wire        e_fifo_pop [0:1];
+  wire        e_crc_init [0:1];
+  wire        e_crc_update [0:1];
+  wire [7:0]  e_crc_byte [0:1];
+  wire        fifo_pop   = e_fifo_pop[0] | e_fifo_pop[1];
+  wire        crc_init   = e_crc_init[0] | e_crc_init[1];
+  wire        crc_update = e_crc_update[0] | e_crc_update[1];
+  wire [7:0]  crc_in     = e_crc_update[0] ? e_crc_byte[0] : e_crc_byte[1];
+  wire        crc_fold   = crc_update | (fifo_pop & ~fifo_empty & fcs_mode);
+  wire [7:0]  crc_fold_byte = crc_update ? crc_in : fifo_head;
+
+  // Reflected CRC-32 (polynomial 0xEDB88320), eight bit-steps per clock.
+  function automatic [31:0] crc32_byte(input [31:0] c, input [7:0] d);
+    integer b;
+    reg [31:0] x;
+    begin
+      x = c ^ {24'd0, d};
+      for (b = 0; b < 8; b = b + 1)
+        x = (x >> 1) ^ (x[0] ? 32'hEDB88320 : 32'd0);
+      crc32_byte = x;
+    end
+  endfunction
+
   genvar g;
   generate
     for (g = 0; g < 2; g = g + 1) begin : eng
@@ -113,7 +167,10 @@ module tt_um_kaikino_protocol_emu #(
           .uo_data(e_uo_data[g]), .uo_oe(e_uo_oe[g]),
           .running(e_running[g]), .done(e_done[g]),
           .trace_we(e_trace_we[g]), .trace_data(e_trace_data[g]),
-          .fault_illegal(e_fault_illegal[g])
+          .fault_illegal(e_fault_illegal[g]),
+          .fifo_data(fifo_data), .fifo_valid(fifo_valid), .fcs(fcs),
+          .fifo_pop(e_fifo_pop[g]), .crc_init(e_crc_init[g]),
+          .crc_update(e_crc_update[g]), .crc_byte(e_crc_byte[g])
       );
     end
   endgenerate
@@ -194,7 +251,7 @@ module tt_um_kaikino_protocol_emu #(
   wire [31:0] read_mux = (read_sel == 3'd0) ? status_word :
                          (read_sel == 3'd1) ? {pc[1], pc[0], mbox_rx[1], mbox_rx[0]} :
                          (read_sel == 3'd2) ? trace_rdata :
-                         (read_sel == 3'd3) ? {{(16-TRACE_AW){1'b0}}, trace_wptr, timestamp} :
+                         (read_sel == 3'd3) ? {{(9-FIFO_AW){1'b0}}, fifo_count, fcs_mode, trace_wptr, timestamp} :
                                               32'h50494F31;
 
   proto_cfg_serial cfg (
@@ -217,6 +274,8 @@ module tt_um_kaikino_protocol_emu #(
       pin_capture_en <= 1'b0; stop_on_full <= 1'b1;
       armed <= 1'b0; triggered <= 1'b0; trace_overflow <= 1'b0;
       trace_wptr <= {TRACE_AW{1'b0}}; trace_rptr <= {TRACE_AW{1'b0}}; trace_count <= {(TRACE_AW+1){1'b0}};
+      fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
+      fcs_mode <= 1'b0; fcs_done <= 1'b0; fcs_idx <= 2'd0; crc <= 32'hFFFFFFFF;
       for (k = 0; k < 2; k = k + 1) begin
         prog_we[k] <= 1'b0; eng_start[k] <= 1'b0; eng_stop[k] <= 1'b0;
         mbox_tx[k] <= 8'd0; mbox_tx_valid[k] <= 1'b0;
@@ -238,6 +297,19 @@ module tt_um_kaikino_protocol_emu #(
         if (trace_wptr == {TRACE_AW{1'b1}}) trace_overflow <= 1'b1;
       end
       if (trace_drop) trace_overflow <= 1'b1;
+
+      // FIFO pop side and CRC.
+      if (fifo_pop) begin
+        if (!fifo_empty) begin
+          fifo_rptr  <= fifo_rptr + 1'b1;
+          fifo_count <= fifo_count - 1'b1;
+        end else if (fcs_avail) begin
+          fcs_idx <= fcs_idx + 2'd1;
+          if (fcs_idx == 2'd3) fcs_done <= 1'b1;
+        end
+      end
+      if (crc_fold) crc <= crc32_byte(crc, crc_fold_byte);
+      if (crc_init) begin crc <= 32'hFFFFFFFF; fcs_idx <= 2'd0; fcs_done <= 1'b0; end
 
       // Mailboxes.
       for (k = 0; k < 2; k = k + 1) begin
@@ -293,10 +365,26 @@ module tt_um_kaikino_protocol_emu #(
             stop_on_full   <= cfg_word[17];
           end
           CMD_READSEL: read_sel <= cfg_word[2:0];
+          CMD_FIFO: begin
+            fcs_mode <= cfg_word[10];
+            if (cfg_word[9]) begin
+              fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
+              crc <= 32'hFFFFFFFF; fcs_idx <= 2'd0; fcs_done <= 1'b0;
+            end else if (cfg_word[8] && !fifo_full) begin
+              fifo_wptr  <= fifo_wptr + 1'b1;
+              // A pop in the same clock keeps the count unchanged.
+              fifo_count <= fifo_count + 1'b1 - {{FIFO_AW{1'b0}}, (fifo_pop & ~fifo_empty)};
+            end
+          end
           default: ;
         endcase
       end
     end
+  end
+
+  always @(posedge clk) begin
+    if (cfg_request && cmd == CMD_FIFO && cfg_word[8] && !cfg_word[9] && !fifo_full)
+      fifo_mem[fifo_wptr] <= cfg_word[7:0];
   end
 
   assign uo_out[7:1] = uo_target;
@@ -319,8 +407,9 @@ module tt_um_kaikino_protocol_emu #(
       // P3: an engine that is not running never enables an output.
       assert(e_running[0] || (e_uio_oe[0] == 8'd0 && e_uo_oe[0] == 7'd0));
       assert(e_running[1] || (e_uio_oe[1] == 8'd0 && e_uo_oe[1] == 7'd0));
-      // P4: the capture bookkeeping never exceeds the buffer.
+      // P4: the capture and FIFO bookkeeping never exceed their buffers.
       assert(trace_count <= TRACE_DEPTH);
+      assert(fifo_count <= (1 << FIFO_AW));
       // P5: program memory is only written while the engine is stopped.
       assert(!prog_we[0] || !e_running[0] || eng_stop[0] || $past(!e_running[0]));
       assert(!prog_we[1] || !e_running[1] || eng_stop[1] || $past(!e_running[1]));
@@ -341,5 +430,5 @@ module tt_um_kaikino_protocol_emu #(
   end
 `endif
 
-  wire _unused = &{ena, CMD_NOP, cfg_word[27:24], cfg_word[18:0], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
+  wire _unused = &{ena, CMD_NOP, cfg_word[27:24], cfg_word[18:11], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
 endmodule

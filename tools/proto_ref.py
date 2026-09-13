@@ -13,6 +13,15 @@ from dataclasses import dataclass, field
 
 TRACE_DEPTH = 32
 PROG_DEPTH = 128  # words per engine; PC bit 7 is ignored by the memory
+FIFO_DEPTH = 128
+
+
+def crc32_byte(crc: int, byte: int) -> int:
+    """One byte of reflected CRC-32 (polynomial 0xEDB88320), as in zlib."""
+    x = crc ^ byte
+    for _ in range(8):
+        x = (x >> 1) ^ (0xEDB88320 if x & 1 else 0)
+    return x
 VERSION = 0x10
 
 
@@ -40,12 +49,22 @@ class Engine:
         self.mbox_in_take = False
         self.mbox_out = 0
         self.mbox_out_we = False
+        # combinational FIFO/CRC requests raised by the instruction just executed
+        self.fifo_pop = False
+        self.crc_init = False
+        self.crc_update = False
+        self.crc_byte = 0
+        # top-level values visible to the instruction being executed
+        self.fifo_data = 0
+        self.fifo_valid = False
+        self.fcs = 0
 
     def step(self, instr: int, pin_in: int, pin_prev: int, mbox_in: int,
              start: bool, start_pc: int, stop: bool, clear_done: bool) -> None:
         self.trace_we = False
         self.mbox_in_take = False
         self.mbox_out_we = False
+        self.fifo_pop = self.crc_init = self.crc_update = False
         if clear_done:
             self.done = False
         if stop:
@@ -135,7 +154,7 @@ class Engine:
             else: self.regs[rd] = ((rd_val << 1) & 0xFF) | pin_now; self.carry = rd_val >> 7
             self.pc = nxt
         elif op == 0xC:
-            fn = imm & 7
+            fn = imm & 15
             if fn == 0: self.regs[rd] = rs_val
             elif fn == 1:
                 s = rd_val + rs_val; self.regs[rd] = s & 0xFF; self.carry = s >> 8
@@ -145,7 +164,12 @@ class Engine:
             elif fn == 4: self.regs[rd] = rd_val | rs_val
             elif fn == 5: self.regs[rd] = rd_val ^ rs_val
             elif fn == 6: self.regs[rd] = self.carry
-            else: self.regs[rd] = (~rd_val) & 0xFF
+            elif fn == 7: self.regs[rd] = (~rd_val) & 0xFF
+            elif fn == 8: self.crc_update = True; self.crc_byte = rd_val
+            elif fn == 9: self.crc_init = True
+            elif fn == 10: self.regs[rd] = (self.fcs >> (8 * ((imm >> 4) & 3))) & 0xFF
+            elif fn == 11:
+                self.regs[rd] = self.fifo_data; self.carry = int(self.fifo_valid); self.fifo_pop = True
             self.pc = nxt
         elif op == 0xD:
             if sub == 0: self.trace_we = True; self.trace_data = imm
@@ -214,6 +238,10 @@ def cmd_readsel(sel: int) -> int:
     return (0x8 << 28) | (sel & 7)
 
 
+def cmd_fifo(data: int = 0, push: bool = False, reset: bool = False, fcs_mode: bool = False) -> int:
+    return (0x9 << 28) | (int(fcs_mode) << 10) | (int(reset) << 9) | (int(push) << 8) | (data & 0xFF)
+
+
 READ_STATUS, READ_MBOX, READ_TRACE, READ_TIME, READ_ID = 0, 1, 2, 3, 4
 
 
@@ -244,6 +272,11 @@ class Chip:
         self.trace_rptr = 0
         self.trace_count = 0
         self.read_sel = 0
+        self.fifo = []          # bytes in order, head first
+        self.fcs_mode = False
+        self.fcs_done = False
+        self.fcs_idx = 0
+        self.crc = 0xFFFFFFFF
         # registered command side effects (take effect one edge later)
         self._prog_we = [False, False]
         self._prog_waddr = 0
@@ -300,7 +333,7 @@ class Chip:
         if sel == READ_TRACE:
             return self.trace[self.trace_rptr]
         if sel == READ_TIME:
-            return (self.trace_wptr << 16) | self.timestamp
+            return (len(self.fifo) << 22) | (int(self.fcs_mode) << 21) | (self.trace_wptr << 16) | self.timestamp
         return 0x50494F31
 
     # -- one clock edge ----------------------------------------------------
@@ -321,9 +354,38 @@ class Chip:
         # Engine pulses (trace, mailbox) are registered in the RTL, so the top
         # level reacts to the pulses produced by the *previous* edge.
         pulses = [(x.trace_we, x.trace_data, x.mbox_in_take, x.mbox_out_we, x.mbox_out) for x in e]
+        fcs = (~self.crc) & 0xFFFFFFFF
+        fcs_avail = self.fcs_mode and not self.fcs_done
+        if self.fifo:
+            fifo_data, fifo_valid = self.fifo[0], True
+        elif fcs_avail:
+            fifo_data, fifo_valid = (fcs >> (8 * self.fcs_idx)) & 0xFF, True
+        else:
+            fifo_data, fifo_valid = 0, False
         for g in range(2):
+            e[g].fifo_data, e[g].fifo_valid, e[g].fcs = fifo_data, fifo_valid, fcs
             e[g].step(self.imem[g][e[g].pc % PROG_DEPTH], pin_in[g], pin_prev[g], self.mbox_tx[g],
                       self._start[g], self.start_pc, self._stop[g], self._clear_done)
+        # FIFO pop / CRC (combinational requests, applied at this edge)
+        pop = e[0].fifo_pop or e[1].fifo_pop
+        upd = e[0].crc_update or e[1].crc_update
+        upd_byte = e[0].crc_byte if e[0].crc_update else e[1].crc_byte
+        init = e[0].crc_init or e[1].crc_init
+        crc_next = self.crc
+        if upd:
+            crc_next = crc32_byte(self.crc, upd_byte)
+        elif pop and self.fifo and self.fcs_mode:
+            crc_next = crc32_byte(self.crc, self.fifo[0])
+        if pop:
+            if self.fifo:
+                self.fifo.pop(0)
+            elif fcs_avail:
+                if self.fcs_idx == 3:
+                    self.fcs_done = True
+                self.fcs_idx = (self.fcs_idx + 1) & 3
+        self.crc = crc_next
+        if init:
+            self.crc, self.fcs_idx, self.fcs_done = 0xFFFFFFFF, 0, False
         # program memory writes registered last cycle
         for g in range(2):
             if self._prog_we[g]:
@@ -425,3 +487,10 @@ class Chip:
             self.stop_on_full = bool(c.bit(17))
         elif k == 0x8:
             self.read_sel = c.bits(2, 0)
+        elif k == 0x9:
+            self.fcs_mode = bool(c.bit(10))
+            if c.bit(9):
+                self.fifo = []
+                self.crc, self.fcs_idx, self.fcs_done = 0xFFFFFFFF, 0, False
+            elif c.bit(8) and len(self.fifo) < FIFO_DEPTH:
+                self.fifo.append(c.bits(7, 0))

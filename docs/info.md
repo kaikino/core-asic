@@ -26,9 +26,13 @@ are all just programs.
   a sticky collision fault is latched; a drive outside the mask is dropped and
   latches a permission fault.  Unowned pins are driven by host GPIO registers.
 * **Host link.** A synchronous SPI mode-0 slave (32-bit frames, up to clk/8)
-  loads programs, starts and stops engines, exchanges mailbox bytes, sets
-  permissions and capture options, and reads back status, mailboxes, the
-  timestamp and trace entries on MISO.
+  loads programs, starts and stops engines, exchanges mailbox bytes, fills a
+  128-byte data FIFO, sets permissions and capture options, and reads back
+  status, mailboxes, the timestamp and trace entries on MISO.
+* **Data FIFO and CRC-32.** Engines pop FIFO bytes in one clock, so a fast
+  protocol can stream a frame loaded ahead of time; a hardware CRC-32 folds
+  the bytes in and hands back the Ethernet FCS, or serves other framings
+  through explicit instructions.
 * **Trace and trigger.** A 32-entry buffer stores timestamped engine events
   and, once armed and triggered (immediately, TRIGGER_IN edge, engine event or
   watched-pin change), every change of the watched pins: a small logic
@@ -50,8 +54,9 @@ suite compares the RTL against it pin-for-pin on every clock.
    and transmits every byte written with a `MBOX` frame at the baud rate set
    by the `.equ BIT` constant.
 4. `examples/` also holds a UART receiver, an SPI master, an I2C master, a
-   10 Mbit/s Manchester transmitter/receiver pair, a 10BASE-T link-pulse
-   generator and a GPIO bring-up blinker.
+   10 Mbit/s Manchester transmitter that sends a complete Ethernet frame
+   (preamble, SFD, FIFO payload, hardware FCS) with a matching receiver, a
+   10BASE-T link-pulse generator and a GPIO bring-up blinker.
 
 ## External hardware
 
@@ -61,5 +66,6 @@ pull-ups for open-drain buses (I2C) and level translation if the target is not
 1.2 V-compatible.  The Manchester programs drive a digital symbol on
 `TARGET_OUT0` with `TARGET_OUT1` as transmit enable and expect a comparator
 output on `TARGET_IN0`; a 10BASE-T experiment therefore needs an external
-line driver, receive comparator and magnetics board.  The chip makes no
-claim of MDI compliance and does not drive a cable directly.
+line driver, receive comparator and magnetics board.  Frames are complete
+(preamble, SFD, payload, CRC-32 FCS) but the chip makes no claim of MDI
+compliance and does not drive a cable directly.

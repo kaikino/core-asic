@@ -2,67 +2,127 @@
 ; from a 40 MHz clock: every half bit is exactly two instructions.
 ; TARGET_OUT0 carries the symbol, TARGET_OUT1 is TX_EN for the line driver.
 ;
-; Each byte is an 8-word two-bits-per-iteration loop.  SHOUT_MSB rotates the
-; data register so a byte survives its own transmission; the loop counter is
-; the number of bit pairs, so the 7-byte preamble is one loop of 28.  The two
-; spare slots per iteration preload the *other* register pair for the next
-; byte, so the byte boundary costs no clocks.  A frame here is preamble, SFD
-; and a short immediate payload; the host restarts the engine per frame.
+; Frame source: the host loads the frame bytes into the data FIFO with FCS
+; mode on (CMD_FIFO), then writes the number of byte *pairs* including the
+; four FCS bytes to the mailbox and starts the engine.  Each POP returns the
+; next byte; after the data the hardware CRC-32 returns the FCS in wire
+; order.  Bytes go on the wire LSB first, as Ethernet requires.
+;
+; Loop structure: SHOUT_LSB rotates the data register so a byte survives its
+; own transmission.  The preamble is one 8-word loop of 28 bit pairs, the SFD
+; is unrolled, and the payload alternates two unrolled byte blocks (A emits
+; r0 and pops r1, B emits r1 and pops r0) so byte boundaries cost no clocks.
+        wait  HIGH, MBOX_IN
+        in    r2, MBOX               ; byte pairs to send
         movi  r0, 0x55
         movi  r3, 28                 ; 7 preamble bytes = 28 bit pairs
-        movi  r1, 0xD5
-        movi  r2, 4
         setp  UO_OE, 0, 1
         setp  UO_OE, 1, 1
         setp  UO, 1, 1               ; TX_EN
-pre:    shout_msb r0, UO, 0, INV     ; first half = ~bit
-        nop
+pre:    shout_lsb r0, UO, 0, INV     ; first half = ~bit
+        movi  r1, 0xD5               ; SFD, harmless to repeat
         setp  UO, 0, C               ; second half = bit
         nop
-        shout_msb r0, UO, 0, INV
+        shout_lsb r0, UO, 0, INV
         nop
         setp  UO, 0, C
         djnz  r3, pre
-sfd:    shout_msb r1, UO, 0, INV     ; 0xD5
-        movi  r0, 0x12               ; payload byte 0
-        setp  UO, 0, C
-        movi  r3, 4
-        shout_msb r1, UO, 0, INV
+sfd:    shout_lsb r1, UO, 0, INV     ; 0xD5 unrolled: 10101011 on the wire
         nop
         setp  UO, 0, C
-        djnz  r2, sfd
-p0:     shout_msb r0, UO, 0, INV
-        movi  r1, 0x34               ; payload byte 1
-        setp  UO, 0, C
-        movi  r2, 4
-        shout_msb r0, UO, 0, INV
-        nop
-        setp  UO, 0, C
-        djnz  r3, p0
-p1:     shout_msb r1, UO, 0, INV
-        movi  r0, 0x56               ; payload byte 2
-        setp  UO, 0, C
-        movi  r3, 4
-        shout_msb r1, UO, 0, INV
-        nop
-        setp  UO, 0, C
-        djnz  r2, p1
-p2:     shout_msb r0, UO, 0, INV
-        movi  r1, 0x78               ; payload byte 3
-        setp  UO, 0, C
-        movi  r2, 4
-        shout_msb r0, UO, 0, INV
-        nop
-        setp  UO, 0, C
-        djnz  r3, p2
-p3:     shout_msb r1, UO, 0, INV
+        pop   r0                     ; first payload byte (POP sets C, so after SETP)
+        shout_lsb r1, UO, 0, INV
         nop
         setp  UO, 0, C
         nop
-        shout_msb r1, UO, 0, INV
+        shout_lsb r1, UO, 0, INV
         nop
         setp  UO, 0, C
-        djnz  r2, p3
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+blka:   shout_lsb r0, UO, 0, INV     ; byte block A: emit r0, fetch r1
+        nop
+        setp  UO, 0, C
+        pop   r1
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r0, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+blkb:   shout_lsb r1, UO, 0, INV     ; byte block B: emit r1, fetch r0
+        nop
+        setp  UO, 0, C
+        pop   r0
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        nop
+        shout_lsb r1, UO, 0, INV
+        nop
+        setp  UO, 0, C
+        djnz  r2, blka
         nop
         setp  UO, 0, 1               ; TP_IDL: hold high two bit times
         delay 6

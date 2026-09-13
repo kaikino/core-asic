@@ -14,7 +14,7 @@ from common import example, read_trace, setup  # noqa: F401
 from proto_asm import assemble_program  # noqa: F401
 from proto_ref import (  # noqa: F401
     READ_ID, READ_MBOX, READ_STATUS, READ_TIME, READ_TRACE, TRACE_DEPTH,
-    cmd_capture, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
+    cmd_capture, cmd_fifo, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
 from protocols import (  # noqa: F401
     I2cSlave, SpiSlave, UartMonitor, UartSource, find_payload, manchester_decode)
 
@@ -57,6 +57,10 @@ async def test_constrained_random(dut):
         await h.xfer(cmd_capture(watch=rng.randrange(1 << 13), trig_src=rng.randrange(6),
                                  pin_capture=True, stop_on_full=bool(rng.randrange(2))))
         await h.xfer(cmd_gpio(rng.randrange(256), rng.randrange(256), rng.randrange(128)))
+        fcs = bool(rng.randrange(2))
+        await h.xfer(cmd_fifo(reset=True, fcs_mode=fcs))
+        for _ in range(rng.randrange(6)):
+            await h.xfer(cmd_fifo(rng.randrange(256), push=True, fcs_mode=fcs))
         await h.xfer(cmd_run(start0=True, start1=True, arm=True, start_pc=rng.randrange(8)))
 
         def noise(hh, rng=rng):
@@ -69,10 +73,14 @@ async def test_constrained_random(dut):
             await h.tick(100)
             if rng.random() < 0.3:
                 await h.xfer(cmd_mbox(rng.randrange(2), rng.randrange(256)))
+            if rng.random() < 0.3:
+                await h.xfer(cmd_fifo(rng.randrange(256), push=True, fcs_mode=fcs))
         h.after_tick = None
         await h.xfer(cmd_run(stop0=True, stop1=True))
         status = await h.read(READ_STATUS)
         assert status == h.model.status_word(), f"status {status:08x} vs model {h.model.status_word():08x}"
+        # The link captures the register a frame early, so ignore the timestamp bits.
+        assert (await h.read(READ_TIME)) >> 16 == h.model.read_register(READ_TIME) >> 16, "FIFO/trace readback"
         n = min(TRACE_DEPTH, (status >> 16) & 0x3F)
         entries = await read_trace(h, n)
         assert entries == h.model.trace[:n], "trace buffer matches the model"
