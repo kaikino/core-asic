@@ -1,0 +1,21 @@
+; 8N1 UART transmitter on GPIO0.  Bytes arrive through the engine mailbox;
+; the host writes CMD_MBOX and the program blocks on MBOX_IN between bytes.
+;
+; Bit period = BIT + 3 clocks (shout 1 + delay 1+BIT + djnz 1).
+; 40 MHz / 20 = 2 Mbaud with BIT=17; 115200 baud needs BIT+3 = 347.
+.equ BIT 17
+        movi  r1, 0x01
+        out   r1, UIO, 0x01          ; idle high
+        out   r1, UIO_OE, 0x01       ; drive GPIO0
+loop:   wait  HIGH, MBOX_IN
+        in    r0, MBOX
+        movi  r2, 8
+        setp  UIO, 0, 0              ; start bit
+        delay BIT
+        nop                          ; start bit is also BIT+3 long
+nbit:   shout_lsb r0, UIO, 0         ; LSB first
+        delay BIT
+        djnz  r2, nbit
+        setp  UIO, 0, 1              ; stop bit
+        delay BIT
+        jmp   loop

@@ -1,0 +1,25 @@
+; SPI mode-0 master, MSB first.  GPIO0 MOSI, GPIO1 SCK, GPIO2 CS_N, GPIO3 MISO.
+; Each mailbox byte is one 8-bit transfer; the byte read back goes to the
+; mailbox and the trace buffer.  SCK half period = HALF + 2 clocks.
+.equ HALF 3
+        movi  r1, 0x04
+        out   r1, UIO, 0x07          ; CS high, SCK low, MOSI low
+        movi  r1, 0x07
+        out   r1, UIO_OE, 0x07
+loop:   wait  HIGH, MBOX_IN
+        in    r0, MBOX
+        movi  r2, 8
+        setp  UIO, 2, 0              ; CS low
+        delay HALF
+bit:    shout_msb r0, UIO, 0         ; MOSI = next bit while SCK is low
+        delay HALF
+        setp  UIO, 1, 1              ; SCK rising edge
+        shin_msb r3, GPIO3           ; sample MISO
+        delay HALF
+        setp  UIO, 1, 0              ; SCK falling edge
+        djnz  r2, bit
+        delay HALF
+        setp  UIO, 2, 1              ; CS high
+        mbox  r3
+        trace r3
+        jmp   loop

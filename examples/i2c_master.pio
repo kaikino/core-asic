@@ -1,0 +1,48 @@
+; I2C master write: START, two mailbox bytes (address+W, data), STOP.
+; GPIO0 SDA, GPIO1 SCL, both open drain: the data register stays 0 and the
+; output enable pulls a line low; external pull-ups provide the high level.
+; Supports clock stretching.  Each ACK bit is traced (bit 0 clear = ACK).
+.equ T 4
+        movi  r1, 0x00
+        out   r1, UIO, 0x03
+        out   r1, UIO_OE, 0x03       ; both lines released
+loop:   wait  HIGH, MBOX_IN
+        in    r0, MBOX
+        not   r0                     ; OE = ~bit
+        movi  r2, 2                  ; bytes per transaction
+        setp  UIO_OE, 0, 1           ; START: SDA low while SCL high
+        delay T
+        setp  UIO_OE, 1, 1           ; SCL low
+byte:   movi  r3, 8
+bit:    delay T
+        shout_msb r0, UIO_OE, 0      ; SDA = data bit (inverted into OE)
+        delay T
+        setp  UIO_OE, 1, 0           ; release SCL
+        wait  HIGH, GPIO1            ; honour clock stretching
+        delay T
+        delay T
+        setp  UIO_OE, 1, 1           ; SCL low
+        djnz  r3, bit
+        delay T
+        setp  UIO_OE, 0, 0           ; release SDA for ACK
+        delay T
+        setp  UIO_OE, 1, 0
+        wait  HIGH, GPIO1
+        delay T
+        in    r1, UIO_IN
+        trace r1                     ; bit 0 = SDA during ACK
+        delay T
+        setp  UIO_OE, 1, 1
+        djnz  r2, next
+        delay T
+        setp  UIO_OE, 0, 1           ; STOP: SDA low
+        delay T
+        setp  UIO_OE, 1, 0           ; SCL high
+        delay T
+        setp  UIO_OE, 0, 0           ; SDA high
+        delay T
+        jmp   loop
+next:   wait  HIGH, MBOX_IN
+        in    r0, MBOX
+        not   r0
+        jmp   byte

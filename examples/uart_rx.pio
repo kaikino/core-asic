@@ -1,0 +1,14 @@
+; 8N1 UART receiver on TARGET_IN0.  Each byte is posted to the mailbox and the
+; trace buffer.  BIT = period - 3, HALF = period / 2 - 1 (see docs/isa.md).
+.equ BIT 17
+.equ HALF 9
+loop:   wait  FALL, IN0              ; start-bit edge
+        delay HALF
+        movi  r2, 8
+nbit:   delay BIT
+        shin_lsb r0, IN0             ; sample mid-bit, LSB first
+        djnz  r2, nbit
+        mbox  r0
+        trace r0
+        wait  HIGH, IN0              ; stop bit / idle
+        jmp   loop
