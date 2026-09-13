@@ -18,6 +18,7 @@ module tt_um_kaikino_protocol_emu (
   localparam [3:0] CMD_GPIO = 4'h1;
   localparam [3:0] CMD_PROGRAM = 4'h2;
   localparam [3:0] CMD_RUN = 4'h3;
+  localparam [3:0] CMD_TRACE_READ = 4'h4;
 
   reg alive;
   reg [7:0] gpio_data;
@@ -50,6 +51,11 @@ module tt_um_kaikino_protocol_emu (
   wire pio1_running, pio1_trace;
   reg collision_fault;
   reg [15:0] trace_latch;
+  reg [7:0] timestamp;
+  reg [4:0] trace_write_ptr, trace_read_ptr;
+  wire [15:0] trace_read_data;
+  wire trace_we = pio0_trace | pio1_trace;
+  wire [15:0] trace_write_data = pio1_trace ? {timestamp, 1'b1, pio1_data[6:0]} : {timestamp, 1'b0, pio0_data[6:0]};
   wire [7:0] drive_collision = pio0_oe & pio1_oe;
 
   proto_program_ram program0 (
@@ -68,6 +74,8 @@ module tt_um_kaikino_protocol_emu (
       .instruction(prog1_instruction), .pc(prog1_pc), .pin_in(uio_in),
       .pin_out(pio1_data), .pin_oe(pio1_oe), .running(pio1_running), .trace_event(pio1_trace)
   );
+  proto_trace_ram trace_ram (.clk(clk), .we(trace_we), .waddr(trace_write_ptr),
+      .wdata(trace_write_data), .raddr(trace_read_ptr), .rdata(trace_read_data));
 
   proto_cfg_serial cfg (
       .clk        (clk),
@@ -97,6 +105,7 @@ module tt_um_kaikino_protocol_emu (
       prog1_we <= 1'b0; prog1_waddr <= 8'b0; prog1_wdata <= 16'b0;
       pio1_start <= 1'b0; pio1_stop <= 1'b0;
       collision_fault <= 1'b0; trace_latch <= 16'b0;
+      timestamp <= 8'b0; trace_write_ptr <= 5'b0; trace_read_ptr <= 5'b0;
     end else begin
       alive <= 1'b1;
       cfg_sync_0 <= cfg_req_toggle;
@@ -106,6 +115,8 @@ module tt_um_kaikino_protocol_emu (
       pio0_stop <= 1'b0;
       prog1_we <= 1'b0; pio1_start <= 1'b0; pio1_stop <= 1'b0;
       if (drive_collision != 0) collision_fault <= 1'b1;
+      timestamp <= timestamp + 1'b1;
+      if (trace_we) trace_write_ptr <= trace_write_ptr + 1'b1;
       if (pio0_trace) trace_latch <= {1'b0, prog0_pc, pio0_data[6:0]};
       if (pio1_trace) trace_latch <= {1'b1, prog1_pc, pio1_data[6:0]};
       if (cfg_request) begin
@@ -130,12 +141,16 @@ module tt_um_kaikino_protocol_emu (
           pio1_start <= cfg_word[2];
           pio1_stop <= cfg_word[3];
         end
+        if (cfg_word[31:28] == CMD_TRACE_READ)
+          trace_read_ptr <= cfg_word[4:0];
       end
     end
   end
 
   assign uo_out[0] = cfg_miso;
-  assign uo_out[6:1] = 6'b0;
+  // Trace readback is intentionally parallel so that all serial control pins
+  // remain dedicated to loading programs. Read an entry with CMD_TRACE_READ.
+  assign uo_out[6:1] = trace_read_data[5:0];
   assign uo_out[7] = alive;
   // A contested pin is made high impedance; unlike a wired-OR merge this is
   // safe for push-pull protocols and leaves a sticky diagnostic behind.

@@ -24,6 +24,10 @@ Both engines may read any GPIO. If they concurrently request push-pull drive
 of the same GPIO, the pin becomes high impedance and a sticky collision flag
 is recorded.
 
+`TRACE` instructions write timestamped events into a 32-entry circular trace
+buffer. Send command `0x4` with an entry index and read its low six bits on
+`uo[6:1]`; the host can reconstruct a capture by stepping the index.
+
 ## How to test
 
 Hold reset low, release it, load instructions, then start an engine. `uo[7]`
