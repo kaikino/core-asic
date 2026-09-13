@@ -1,4 +1,8 @@
-The challenge
+# Programmable Protocol Emulator ASIC
+
+An open-source, reprogrammable GPIO protocol emulator for Tiny Tapeout IHP
+CMOS5L. The project is developed in small verified commits. See
+[`docs/info.md`](docs/info.md) for the current hardware interface.
 
 Design an open-source, general-purpose protocol emulator ASIC.
 

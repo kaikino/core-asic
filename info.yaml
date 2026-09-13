@@ -1,0 +1,56 @@
+# Tiny Tapeout project information
+project:
+  title:        "Programmable Protocol Emulator"      # Project title
+  author:       "kaikino"      # Your name
+  discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
+  description:  "Dual-engine programmable GPIO protocol emulator"
+  language:     "SystemVerilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
+  clock_hz:     40000000
+
+  # How many tiles your design occupies? A single tile is about 167x108 uM.
+  tiles: "8x4"
+
+  # Your top module name must start with "tt_um_". Make it unique by including your github username:
+  top_module:  "tt_um_kaikino_protocol_emu"
+
+  # List your project's source files here.
+  # Source files must be in ./src and you must list each source file separately, one per line.
+  # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
+  source_files:
+    - "tt_um_kaikino_protocol_emu.sv"
+
+# The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
+# This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
+pinout:
+  # Inputs
+  ui[0]: "CFG_SCK"
+  ui[1]: "CFG_MOSI"
+  ui[2]: "CFG_CS_N"
+  ui[3]: "TARGET_IN0"
+  ui[4]: "TARGET_IN1"
+  ui[5]: "TARGET_IN2"
+  ui[6]: "TARGET_IN3"
+  ui[7]: "TRIGGER_IN"
+
+  # Outputs
+  uo[0]: "CFG_MISO"
+  uo[1]: "TARGET_OUT0"
+  uo[2]: "TARGET_OUT1"
+  uo[3]: "TARGET_OUT2"
+  uo[4]: "TARGET_OUT3"
+  uo[5]: "TARGET_OUT4"
+  uo[6]: "TARGET_OUT5"
+  uo[7]: "STATUS"
+
+  # Bidirectional pins
+  uio[0]: "GPIO0"
+  uio[1]: "GPIO1"
+  uio[2]: "GPIO2"
+  uio[3]: "GPIO3"
+  uio[4]: "GPIO4"
+  uio[5]: "GPIO5"
+  uio[6]: "GPIO6"
+  uio[7]: "GPIO7"
+
+# Do not change!
+yaml_version: 6
