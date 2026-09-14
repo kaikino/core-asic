@@ -144,6 +144,12 @@ jobs:
         working-directory: tt/precheck
         run: pip install -r requirements.txt
 
+      - name: Run the CMOS5L DRC in tiled mode
+        # The deck's default deep mode needs hours on a 1.2 mm2 block (it
+        # exceeded the 6 h job limit); tiled multi-threaded mode gives the
+        # same clean result in under a minute.
+        run: python3 flow/patch_precheck_tiling.py tt/precheck/precheck.py
+
       - name: Install ihp-sg13cmos5l PDK
         run: flow/install_pdk.sh
 

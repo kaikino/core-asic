@@ -17,7 +17,7 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | Place and route | OpenROAD (LibreLane) | routed, 0 routing DRC errors, 0 antenna violations after 36 diodes |
 | Timing | OpenSTA, nom_typ / min / max corners | setup and hold met at every corner, TNS 0 (see below) |
 | DRC | Magic (flow step 62) | 0 errors, 0 illegal overlaps |
-| Precheck | tt-support-tools `precheck.py` with KLayout 0.30.12 (CMOS5L DRC, pin-label overlap, zero area, pin, boundary, layer, cell-name, analog-pin checks) | all 9 checks pass on the final GDS with the generated 8x4 template |
+| Precheck | tt-support-tools `precheck.py` with KLayout 0.30.12 (CMOS5L DRC, pin-label overlap, zero area, pin, boundary, layer, cell-name, analog-pin checks) | all 9 checks pass on the final GDS with the generated 8x4 template; the DRC runs in the deck's tiled mode (`flow/patch_precheck_tiling.py`, 37 s; the default deep mode took 7.5 h locally and exceeded the 6 h CI job limit) |
 | LVS | netgen (flow step 66) | 0 device/net/pin mismatches |
 | Gate-level simulation | cocotb on the final netlist with CMOS5L cell models | 12/12 pass on `final/nl` netlist (`make GATES=yes`) |
 | FPGA bitstream | Yosys + nextpnr-ice40 (TT ASIC-sim UP5K board) | builds: 2 338 / 5 280 logic cells (44 %), 5 block RAMs, Fmax 15.0 MHz (board clock 12 MHz) |
