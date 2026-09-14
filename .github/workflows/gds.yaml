@@ -105,14 +105,79 @@ jobs:
           name: gds_render
           path: 'gds_render.png'
 
-  # These reuse the official actions and will pass once the upstream support
-  # tools know the 8x4 block; until then they report the tiles gap.
+  # precheck and gl_test mirror TinyTapeout/tt-gds-action/{precheck,gl_test}
+  # @ihp-cmos5l but install the PDK with flow/install_pdk.sh: the action's own
+  # installer clones ihp-sg13cmos5l into a directory that the IHP-Open-PDK
+  # dev branch now already contains, so the upstream jobs fail before they
+  # start.
   precheck:
     needs: gds
     runs-on: ubuntu-24.04
     steps:
-      - name: Run Tiny Tapeout Precheck
-        uses: TinyTapeout/tt-gds-action/precheck@ihp-cmos5l
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Checkout tt-support-tools (CMOS5L branch)
+        uses: actions/checkout@v6
+        with:
+          repository: htfab/tt-support-tools
+          ref: cmos
+          path: tt
+
+      - name: Add the 8x4 floorplan template
+        run: |
+          python3 flow/gen_tile_def.py tt/tech/ihp-sg13cmos5l/def/tt_block_8x2_pgvdd.def tt/tech/ihp-sg13cmos5l/def/tt_block_8x4_pgvdd.def
+          grep -q '^8x4:' tt/tech/ihp-sg13cmos5l/tile_sizes.yaml || echo '8x4: "0 0 1724.16 710.64"' >> tt/tech/ihp-sg13cmos5l/tile_sizes.yaml
+
+      - name: Download GDS artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: tt_submission
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        working-directory: tt/precheck
+        run: pip install -r requirements.txt
+
+      - name: Install ihp-sg13cmos5l PDK
+        run: flow/install_pdk.sh
+
+      - name: Install Nix
+        uses: rikhuijzer/cache-install@v1.1.4
+        with:
+          key: nix-${{ hashFiles('tt/precheck/default.nix') }}
+          nix_file: 'tt/precheck/default.nix'
+
+      - name: Build Nix packages
+        working-directory: tt/precheck
+        run: nix-build
+
+      - name: Run precheck
+        working-directory: tt/precheck
+        run: nix-shell --run "python precheck.py --gds ${{ github.workspace }}/tt_submission/*.gds* --tech $PDK"
+
+      - name: Test Summary
+        uses: test-summary/action@v2.4
+        with:
+          paths: 'tt/precheck/reports/results.xml'
+        if: always()
+
+      - name: Capture test results
+        working-directory: tt/precheck
+        if: always()
+        run: cat reports/results.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: precheck_reports
+          path: tt/precheck/reports
 
   gl_test:
     needs: gds
@@ -120,12 +185,56 @@ jobs:
     steps:
       - name: checkout repo
         uses: actions/checkout@v6
+
+      - name: Download GDS artifact
+        uses: actions/download-artifact@v7
         with:
-          submodules: recursive
+          name: tt_submission
 
-      - name: GL test
-        uses: TinyTapeout/tt-gds-action/gl_test@ihp-cmos5l
+      - name: Install ihp-sg13cmos5l PDK
+        run: flow/install_pdk.sh
 
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        run: pip install -r test/requirements.txt
+
+      - name: Install iverilog
+        run: |
+          wget https://github.com/TinyTapeout/iverilog/releases/download/v13.0/iverilog_13.0-1_amd64.deb
+          sudo apt-get update -y
+          sudo apt-get install -y ./iverilog_13.0-1_amd64.deb
+
+      - name: Run tests
+        run: |
+          cp tt_submission/*.v test/gate_level_netlist.v
+          cd test
+          rm -f tb.vcd tb.fst results.xml
+          make clean
+          GATES=yes make
+          test -f results.xml
+          ! grep failure results.xml
+
+      - name: Upload Waveform and Test Results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gatelevel_test_results
+          path: |
+            test/tb.fst
+            test/results.xml
+
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2.4
+        with:
+          paths: test/results.xml
+
+  # Needs GitHub Pages enabled for the repository (Settings > Pages > Source:
+  # GitHub Actions); otherwise this job fails with a 404 deployment error.
   viewer:
     needs: gds
     runs-on: ubuntu-24.04
