@@ -1,0 +1,20 @@
+{
+  "DESIGN_NAME": "tdc_probe",
+  "VERILOG_FILES": ["dir::tdc_probe.sv"],
+  "CLOCK_PORT": "clk",
+  "CLOCK_PERIOD": 25,
+  "FP_SIZING": "absolute",
+  "DIE_AREA": [0, 0, 160, 120],
+  "FP_PDN_VPITCH": 50.0,
+  "FP_PDN_VWIDTH": 2.1,
+  "FP_PDN_MULTILAYER": false,
+  "PL_TARGET_DENSITY_PCT": 55,
+  "RSZ_DONT_TOUCH_RX": ".*dly.*",
+  "PNR_SDC_FILE": "dir::tdc.sdc",
+  "SIGNOFF_SDC_FILE": "dir::tdc.sdc",
+  "RUN_KLAYOUT_XOR": false,
+  "RUN_KLAYOUT_DRC": false,
+  "RUN_MAGIC_DRC": false,
+  "RUN_LVS": false,
+  "RUN_IRDROP_REPORT": false
+}

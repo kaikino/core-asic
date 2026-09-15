@@ -24,3 +24,4 @@ build/
 src/_tt_fpga_top.v
 formal/proto*/
 test/results*.xml
+experiments/*/runs/
