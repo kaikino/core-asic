@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 `default_nettype none
 
 // Instruction memory wrapper.  The CMOS5L slim PDK used for this shuttle ships

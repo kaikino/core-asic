@@ -23,6 +23,7 @@ Contents
 11. [The data FIFO and CRC-32](#11-the-data-fifo-and-crc-32)
 12. [Trace, trigger and capture (`proto_trace_ram.sv`)](#12-trace-trigger-and-capture-proto_trace_ramsv)
 13. [Reading things back](#13-reading-things-back)
+13a. [Sub-clock timing: seeing and placing edges between clocks](#13a-sub-clock-timing-seeing-and-placing-edges-between-clocks)
 14. [A worked example: one UART byte, clock by clock](#14-a-worked-example-one-uart-byte-clock-by-clock)
 15. [The Ethernet frame, and why the loop is shaped the way it is](#15-the-ethernet-frame-and-why-the-loop-is-shaped-the-way-it-is)
 16. [The software: assembler and reference model](#16-the-software-assembler-and-reference-model)
@@ -738,6 +739,72 @@ entry count. Because the link captures `read_mux` while CS_N is high
 at what comes back on MISO during it. The test harness's `read()` helper
 does exactly those two frames.
 
+## 13a. Sub-clock timing: seeing and placing edges between clocks
+
+Everything above happens on clock edges, 25 ns apart. That is the one
+limitation this design shares with every PIO-style engine, and the part of
+the chip that removes it is also the only part that is not ordinary digital
+logic.
+
+**The delay line (`proto_delay_chain.sv`).** A chain of 176 delay cells from
+the CMOS5L library, each instantiated by name:
+
+```systemverilog
+(* keep *) sg13cmos5l_dlygate4sd2_1 tdly_cell (.A(tdly_tap[i]), .X(tdly_tap[i+1]));
+```
+
+A signal entering `tdly_tap[0]` reaches tap `i` about `i` times 0.22 ns later
+(0.15 ns at the fast corner, 0.35 ns at the slow one). The `(* keep *)`
+attribute stops synthesis from optimising a chain of buffers that "does
+nothing", and two flow settings stop place-and-route from doing the same:
+`RSZ_DONT_TOUCH_RX` in `src/config.json` matches the `tdly` token in every
+chain name so the resizer never deletes or re-buffers a stage, and
+`src/proto.sdc` declares every path through a chain a false path so timing
+repair has no reason to touch it. Without those two lines the tools removed
+most of the chain in the first experiment (`experiments/tdc/README.md`).
+
+**Measuring an edge (`proto_tdc.sv`).** Feed a pin into the chain and sample
+all 176 taps on the clock edge. If the pin rose 8 ns before the edge, the
+first 36 taps already show the new level and the rest still show the old
+one. Counting the taps that match the new level gives the arrival time in
+units of one stage:
+
+```systemverilog
+wire [STAGES-1:0] matched = lvl_q ? snap_q : ~snap_q;   // taps the edge has reached
+for (k = 0; k < STAGES; k = k + 1) cnt = cnt + matched[k];
+```
+
+Counting rather than looking for the boundary matters: a tap sampled exactly
+as it changes can come out wrong (metastability), which shows up as a bubble
+in the pattern, and a count is off by at most one either way. The samples
+also pass through two flops, exactly like the ordinary input synchronisers,
+so the count lines up with the synchronised pin that the rest of the chip
+sees. The top level latches the count and level whenever that pin changes,
+exposes them to programs (`in rd, TDC0`) and the host (register 5), and can
+write them into the trace buffer next to the coarse timestamp.
+
+**Calibration.** The stage delay varies more than two to one with process,
+voltage and temperature, so counts are only meaningful once the chip knows
+its own stage. Source 13 of each TDC channel is a flop that toggles every
+clock: its edges are exactly 25 ns apart, so its count *is* the number of
+stages per period, measured on this die right now. Every other measurement
+is a ratio against it.
+
+**Placing an edge (`proto_dtc.sv`).** The reverse: the value a program wants
+on a TARGET_OUT pin enters a second chain, and a 177-way multiplexer picks
+the tap that drives the pad. Tap 60 means the pin changes 60 stages, about
+13 ns, after the clock edge that launched it. A program sets the tap with
+`dtcw`; the host with a TIMING frame.
+
+**Simulating something the simulator cannot see.** The foundry's cell models
+are zero-delay, so in a plain simulation every tap changes at once and the
+count is always 176. The RTL build for tests therefore swaps the cells for
+`assign #0.224` statements (`-DTDLY_PS=224`), and the reference model
+computes the same counts from the exact times the test harness changes the
+pads (always 1 ns after a clock edge). The fine values are then compared
+exactly, every clock, like everything else. Gate-level and FPGA runs set the
+stage to zero and check only the plumbing.
+
 ## 14. A worked example: one UART byte, clock by clock
 
 `examples/uart_tx.pio`, with `BIT = 17` for a 20-clock bit (2 Mbaud at
@@ -923,6 +990,11 @@ simpler to time.
 **Why rotate instead of shift in `SHOUT`?** A rotated byte is intact after
 eight bits, so a repeated pattern (the 0x55 preamble) needs no reload and
 loops stay tight.
+
+**Why delay lines, and why so late?** They are the one thing here that
+neither PIO nor a fixed peripheral can do: time below the clock. They were
+added last because they are the riskiest part of the design for the tools
+(section 13a) and needed a standalone experiment before touching the chip.
 
 **Why did the FIFO get added late?** The first Manchester demo used
 immediates as payload and could not stream a frame. Adding a 128-byte FIFO

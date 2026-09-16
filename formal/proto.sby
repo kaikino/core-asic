@@ -20,6 +20,9 @@ read_verilog -formal -sv proto_pio_engine.sv
 read_verilog -formal -sv proto_cfg_serial.sv
 read_verilog -formal -sv proto_program_ram.sv
 read_verilog -formal -sv proto_trace_ram.sv
+read_verilog -formal -sv -DFORMAL proto_delay_chain.sv
+read_verilog -formal -sv proto_tdc.sv
+read_verilog -formal -sv proto_dtc.sv
 read_verilog -formal -sv -DFORMAL tt_um_kaikino_protocol_emu.sv
 prep -top tt_um_kaikino_protocol_emu
 async2sync
@@ -29,4 +32,7 @@ async2sync
 ../src/proto_cfg_serial.sv
 ../src/proto_program_ram.sv
 ../src/proto_trace_ram.sv
+../src/proto_delay_chain.sv
+../src/proto_tdc.sv
+../src/proto_dtc.sv
 ../src/tt_um_kaikino_protocol_emu.sv

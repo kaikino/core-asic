@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
@@ -17,7 +18,8 @@ module tt_um_kaikino_protocol_emu #(
     parameter integer PROG_AW     = 7,   // 128 x 16 instruction words per engine
     parameter integer TRACE_DEPTH = 32,
     parameter integer TRACE_AW    = 5,
-    parameter integer FIFO_AW     = 7    // 128-byte host-to-engine data FIFO
+    parameter integer FIFO_AW     = 7,   // 128-byte host-to-engine data FIFO
+    parameter integer TDLY_STAGES = 176  // delay-line length (about one clock period at the fast corner)
 ) (
     input  wire [7:0] ui_in,
     output wire [7:0] uo_out,
@@ -41,6 +43,7 @@ module tt_um_kaikino_protocol_emu #(
   localparam [3:0] CMD_CAPTURE  = 4'h7;  // [12:0] watch [15:13] trigger [16] pin capture [17] stop on full
   localparam [3:0] CMD_READSEL  = 4'h8;  // [2:0] readback register
   localparam [3:0] CMD_FIFO     = 4'h9;  // [7:0] data [8] push [9] reset [10] FCS mode
+  localparam [3:0] CMD_TIMING   = 4'hA;  // [27] channel [26] 0: TDC {[3:0] source, [8] trace} 1: DTC {[2:0] pin, [8] enable, [23:16] tap}
   localparam [7:0] VERSION      = 8'h10;
 
   // ------------------------------------------------------------------
@@ -93,6 +96,30 @@ module tt_um_kaikino_protocol_emu #(
   reg  [6:0]  host_uo_data;
 
   reg         fault_collision, fault_perm;
+
+  // ------------------------------------------------------------------
+  // Sub-clock timing: two TDC channels (edge arrival time within the
+  // clock period) and two DTC channels (edge placement within the period).
+  // Sources 0-12 are the target inputs in pins_raw order, 13 is a toggle
+  // flop whose edges are exactly one period apart, for self-calibration.
+  // ------------------------------------------------------------------
+  reg  [3:0]  tdc_src [0:1];
+  reg         tdc_trace_en [0:1];
+  reg  [7:0]  tdc_fine [0:1];
+  reg         tdc_level [0:1];
+  reg         tdc_level_prev [0:1];
+  reg  [2:0]  dtc_pin [0:1];
+  reg         dtc_en [0:1];
+  reg  [7:0]  dtc_tap [0:1];
+  reg         cal_toggle;
+  wire [7:0]  tdc_fine_now [0:1];
+  wire        tdc_level_now [0:1];
+  wire        tdc_edge [0:1];
+  wire        dtc_out [0:1];
+  wire        e_dtc_we [0:1];
+  wire        e_dtc_ch [0:1];
+  wire [7:0]  e_dtc_data [0:1];
+  wire [17:0] tdc_word = {tdc_level[1], tdc_level[0], tdc_fine[1], tdc_fine[0]};
 
   // ------------------------------------------------------------------
   // Host-to-engine data FIFO with CRC-32 (Ethernet FCS) support.  Either
@@ -170,10 +197,12 @@ module tt_um_kaikino_protocol_emu #(
           .fault_illegal(e_fault_illegal[g]),
           .fifo_data(fifo_data), .fifo_valid(fifo_valid), .fcs(fcs),
           .fifo_pop(e_fifo_pop[g]), .crc_init(e_crc_init[g]),
-          .crc_update(e_crc_update[g]), .crc_byte(e_crc_byte[g])
+          .crc_update(e_crc_update[g]), .crc_byte(e_crc_byte[g]),
+          .tdc_word(tdc_word), .dtc_we(e_dtc_we[g]), .dtc_ch(e_dtc_ch[g]), .dtc_data(e_dtc_data[g])
       );
     end
   endgenerate
+
 
   // ------------------------------------------------------------------
   // Safe pin arbitration.  An engine may only enable pins the host granted;
@@ -198,6 +227,23 @@ module tt_um_kaikino_protocol_emu #(
   wire [6:0] uo_target = (drv_uo0 & e_uo_data[0]) | (drv_uo1 & e_uo_data[1]) |
                          (~(req_uo0 | req_uo1) & host_uo_data);
 
+  genvar c;
+  generate
+    for (c = 0; c < 2; c = c + 1) begin : timing
+      wire tdc_in = (tdc_src[c] == 4'd13) ? cal_toggle :
+                    (tdc_src[c] <= 4'd12) ? pins_raw[tdc_src[c]] : 1'b0;
+      proto_tdc #(.STAGES(TDLY_STAGES)) tdc (
+          .clk(clk), .rst_n(rst_n), .in(tdc_in),
+          .fine_now(tdc_fine_now[c]), .level_now(tdc_level_now[c])
+      );
+      assign tdc_edge[c] = tdc_level_now[c] ^ tdc_level_prev[c];
+      // The DTC input is the arbitrated pin value, launched by the clock.
+      proto_dtc #(.STAGES(TDLY_STAGES)) dtc (
+          .in(uo_target[dtc_pin[c]]), .sel(dtc_tap[c]), .out(dtc_out[c])
+      );
+    end
+  endgenerate
+
   // ------------------------------------------------------------------
   // Timestamp, trigger and capture buffer.
   // ------------------------------------------------------------------
@@ -221,15 +267,24 @@ module tt_um_kaikino_protocol_emu #(
                    (trig_src == 3'd5 && pin_change != 13'd0);
   wire capturing  = triggered | (armed & trig_hit);
   wire want_pin   = capturing & pin_capture_en & (pin_change != 13'd0);
+  wire want_tdc0  = capturing & tdc_trace_en[0] & tdc_edge[0];
+  wire want_tdc1  = capturing & tdc_trace_en[1] & tdc_edge[1];
   wire trace_full = trace_count[TRACE_AW];
   wire trace_block = trace_full & stop_on_full;
-  wire trace_want  = e_trace_we[0] | e_trace_we[1] | want_pin;
+  wire trace_want  = e_trace_we[0] | e_trace_we[1] | want_tdc0 | want_tdc1 | want_pin;
   wire trace_we    = trace_want & ~trace_block;
+  // One entry per clock: engine 0, engine 1, TDC 0, TDC 1, then pin capture.
   wire trace_drop  = (trace_want & trace_block) |
-                     (e_trace_we[0] & (e_trace_we[1] | want_pin)) |
-                     (e_trace_we[1] & want_pin);
+                     (e_trace_we[0] & (e_trace_we[1] | want_tdc0 | want_tdc1 | want_pin)) |
+                     (e_trace_we[1] & (want_tdc0 | want_tdc1 | want_pin)) |
+                     (want_tdc0 & (want_tdc1 | want_pin)) |
+                     (want_tdc1 & want_pin);
+  // Kinds: 0 engine event {eng, data8}, 1 pin capture {pins13},
+  //        2 timed edge {channel, level, fine8, 4'b0}.
   wire [31:0] trace_wdata = e_trace_we[0] ? {timestamp, 2'd0, 1'b0, 5'd0, e_trace_data[0]} :
                             e_trace_we[1] ? {timestamp, 2'd0, 1'b1, 5'd0, e_trace_data[1]} :
+                            want_tdc0     ? {timestamp, 2'd2, 1'b0, tdc_level_now[0], tdc_fine_now[0], 4'd0} :
+                            want_tdc1     ? {timestamp, 2'd2, 1'b1, tdc_level_now[1], tdc_fine_now[1], 4'd0} :
                                             {timestamp, 2'd1, 1'b0, pins_q};
 
   proto_trace_ram #(.DEPTH(TRACE_DEPTH), .AW(TRACE_AW)) trace_ram (
@@ -252,6 +307,7 @@ module tt_um_kaikino_protocol_emu #(
                          (read_sel == 3'd1) ? {pc[1], pc[0], mbox_rx[1], mbox_rx[0]} :
                          (read_sel == 3'd2) ? trace_rdata :
                          (read_sel == 3'd3) ? {{(9-FIFO_AW){1'b0}}, fifo_count, fcs_mode, trace_wptr, timestamp} :
+                         (read_sel == 3'd5) ? {TDLY_STAGES[7:0], 6'd0, tdc_level[1], tdc_level[0], tdc_fine[1], tdc_fine[0]} :
                                               32'h50494F31;
 
   proto_cfg_serial cfg (
@@ -276,7 +332,11 @@ module tt_um_kaikino_protocol_emu #(
       trace_wptr <= {TRACE_AW{1'b0}}; trace_rptr <= {TRACE_AW{1'b0}}; trace_count <= {(TRACE_AW+1){1'b0}};
       fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
       fcs_mode <= 1'b0; fcs_done <= 1'b0; fcs_idx <= 2'd0; crc <= 32'hFFFFFFFF;
+      cal_toggle <= 1'b0;
       for (k = 0; k < 2; k = k + 1) begin
+        tdc_src[k] <= 4'd15; tdc_trace_en[k] <= 1'b0; tdc_fine[k] <= 8'd0;
+        tdc_level[k] <= 1'b0; tdc_level_prev[k] <= 1'b0;
+        dtc_pin[k] <= 3'd0; dtc_en[k] <= 1'b0; dtc_tap[k] <= 8'd0;
         prog_we[k] <= 1'b0; eng_start[k] <= 1'b0; eng_stop[k] <= 1'b0;
         mbox_tx[k] <= 8'd0; mbox_tx_valid[k] <= 1'b0;
         mbox_rx[k] <= 8'd0; mbox_rx_pending[k] <= 1'b0;
@@ -297,6 +357,15 @@ module tt_um_kaikino_protocol_emu #(
         if (trace_wptr == {TRACE_AW{1'b1}}) trace_overflow <= 1'b1;
       end
       if (trace_drop) trace_overflow <= 1'b1;
+
+      // Sub-clock timing bookkeeping.
+      cal_toggle <= ~cal_toggle;
+      for (k = 0; k < 2; k = k + 1) begin
+        tdc_level_prev[k] <= tdc_level_now[k];
+        if (tdc_edge[k]) begin tdc_fine[k] <= tdc_fine_now[k]; tdc_level[k] <= tdc_level_now[k]; end
+      end
+      if (e_dtc_we[0])      dtc_tap[e_dtc_ch[0]] <= e_dtc_data[0];
+      else if (e_dtc_we[1]) dtc_tap[e_dtc_ch[1]] <= e_dtc_data[1];
 
       // FIFO pop side and CRC.
       if (fifo_pop) begin
@@ -365,6 +434,16 @@ module tt_um_kaikino_protocol_emu #(
             stop_on_full   <= cfg_word[17];
           end
           CMD_READSEL: read_sel <= cfg_word[2:0];
+          CMD_TIMING: begin
+            if (!cfg_word[26]) begin
+              tdc_src[cfg_word[27]]      <= cfg_word[3:0];
+              tdc_trace_en[cfg_word[27]] <= cfg_word[8];
+            end else begin
+              dtc_pin[cfg_word[27]] <= cfg_word[2:0];
+              dtc_en[cfg_word[27]]  <= cfg_word[8];
+              dtc_tap[cfg_word[27]] <= cfg_word[23:16];
+            end
+          end
           CMD_FIFO: begin
             fcs_mode <= cfg_word[10];
             if (cfg_word[9]) begin
@@ -387,7 +466,14 @@ module tt_um_kaikino_protocol_emu #(
       fifo_mem[fifo_wptr] <= cfg_word[7:0];
   end
 
-  assign uo_out[7:1] = uo_target;
+  // A DTC channel replaces its selected TARGET_OUT bit with the delayed copy.
+  genvar b;
+  generate
+    for (b = 0; b < 7; b = b + 1) begin : uo_mux
+      assign uo_out[b+1] = (dtc_en[0] && dtc_pin[0] == b) ? dtc_out[0] :
+                           (dtc_en[1] && dtc_pin[1] == b) ? dtc_out[1] : uo_target[b];
+    end
+  endgenerate
 
 `ifdef FORMAL
   // ------------------------------------------------------------------
@@ -430,5 +516,5 @@ module tt_um_kaikino_protocol_emu #(
   end
 `endif
 
-  wire _unused = &{ena, CMD_NOP, cfg_word[27:24], cfg_word[18:11], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
+  wire _unused = &{ena, CMD_NOP, cfg_word[25:24], cfg_word[18:11], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
 endmodule

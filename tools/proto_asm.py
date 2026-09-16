@@ -9,7 +9,7 @@ Syntax (case-insensitive, `#` `;` `//` start comments, labels end with `:`):
 
     movi  r0, 0x55
     out   r0, UIO, 0xff           ; write masked bits of r0 to a target
-    in    r1, UIO_IN              ; UIO_IN | AUX | MBOX | UIO_DATA
+    in    r1, UIO_IN              ; UIO_IN | AUX | MBOX | UIO_DATA | TDC0 | TDC1 | TDCLVL
     delay 10                      ; delay r2 | delay 10*16 | delay r2*16
     wait  HIGH, GPIO3             ; LOW | HIGH | RISE | FALL
     jmp   label
@@ -22,6 +22,7 @@ Syntax (case-insensitive, `#` `;` `//` start comments, labels end with `:`):
     mov   r0, r1                  ; add sub and or xor movc not
     pop   r0                      ; next host FIFO byte, C = valid
     crci | crcu r0 | crcb r1, 2   ; CRC-32 init / fold r0 / read FCS byte 2
+    dtcw  r0, 1                   ; DTC channel 1 delay tap = r0
     trace 0x42 | trace r0 | mbox r0 | done
     halt | nop
 
@@ -43,11 +44,12 @@ OPC = {
 }
 TARGETS = {"uio": 0, "uio_oe": 1, "uo": 2, "uo_oe": 3}
 IN_SRC = {"uio_in": 0, "aux": 1, "mbox": 2, "uio_data": 3}
+IN3_SUB = {"uio_data": 0, "tdc0": 1, "tdc1": 2, "tdclvl": 3}
 WAIT_COND = {"low": 0, "high": 1, "rise": 2, "fall": 3}
 BR_COND = {"jnz": 0, "djnz": 1, "jz": 2, "djz": 3}
 SHIFT_MODE = {"shl": 0, "shr": 1, "shin_lsb": 2, "shin_msb": 3}
 ALU_FN = {"mov": 0, "add": 1, "sub": 2, "and": 3, "or": 4, "xor": 5, "movc": 6, "not": 7,
-          "crcu": 8, "crci": 9, "crcb": 10, "pop": 11}
+          "crcu": 8, "crci": 9, "crcb": 10, "pop": 11, "dtcw": 12}
 EVT_SUB = {"trace": 0, "mbox": 2, "done": 3}
 PINS = {**{f"gpio{i}": i for i in range(8)}, **{f"in{i}": 8 + i for i in range(4)},
         "trig": 12, "mbox_in": 13, "mbox_out": 14, "peer": 15}
@@ -110,6 +112,8 @@ def encode(mnemonic: str, args: list[str], symbols: dict[str, int]) -> int:
         mask = _value(a[2], symbols) if n == 3 else 0xFF
         return (OPC["out"] << 12) | (_reg(a[0]) << 10) | (TARGETS[a[1]] << 8) | mask
     if m == "in" and n == 2:
+        if a[1] in IN3_SUB:
+            return (OPC["in"] << 12) | (_reg(a[0]) << 10) | (3 << 8) | IN3_SUB[a[1]]
         return (OPC["in"] << 12) | (_reg(a[0]) << 10) | (IN_SRC[a[1]] << 8)
     if m == "delay" and n == 1:
         tok = a[0]
@@ -148,6 +152,8 @@ def encode(mnemonic: str, args: list[str], symbols: dict[str, int]) -> int:
         rd = _reg(a[0])
         if m == "crcb":
             return (OPC["alu"] << 12) | (rd << 10) | (_value(a[1], symbols, 2) << 4) | ALU_FN[m]
+        if m == "dtcw":
+            return (OPC["alu"] << 12) | (rd << 10) | (_value(a[1], symbols, 1) << 4) | ALU_FN[m]
         rs = _reg(a[1]) if n == 2 else rd
         return (OPC["alu"] << 12) | (rd << 10) | (rs << 8) | ALU_FN[m]
     if m == "trace" and n == 1:
@@ -215,7 +221,10 @@ def disassemble(word: int) -> str:
     if op == 0x0: return "nop"
     if op == 0x1: return f"movi r{rd}, 0x{imm:02x}"
     if op == 0x2: return f"out r{rd}, {tgt[sub]}, 0x{imm:02x}"
-    if op == 0x3: return f"in r{rd}, {['UIO_IN','AUX','MBOX','UIO_DATA'][sub]}"
+    if op == 0x3:
+        if sub == 3:
+            return f"in r{rd}, {['UIO_DATA','TDC0','TDC1','TDCLVL'][imm & 3]}"
+        return f"in r{rd}, {['UIO_IN','AUX','MBOX'][sub]}"
     if op == 0x4:
         base = f"r{rd}" if sub & 1 else f"{imm}"
         return f"delay {base}{'*16' if sub & 2 else ''}"
@@ -235,12 +244,13 @@ def disassemble(word: int) -> str:
         name = ['shl', 'shr', 'shin_lsb', 'shin_msb'][sub]
         return f"{name} r{rd}" + (f", {pin[imm & 15]}" if sub >= 2 else "")
     if op == 0xC:
-        names = ['mov', 'add', 'sub', 'and', 'or', 'xor', 'movc', 'not', 'crcu', 'crci', 'crcb', 'pop']
+        names = ['mov', 'add', 'sub', 'and', 'or', 'xor', 'movc', 'not', 'crcu', 'crci', 'crcb', 'pop', 'dtcw']
         if (imm & 15) >= len(names):
             return f".word 0x{word:04x}  ; illegal ALU fn"
         fn = names[imm & 15]
         if fn == 'crci': return "crci"
         if fn == 'crcb': return f"crcb r{rd}, {(imm >> 4) & 3}"
+        if fn == 'dtcw': return f"dtcw r{rd}, {(imm >> 4) & 1}"
         return f"{fn} r{rd}" + (f", r{sub}" if fn in ('mov', 'add', 'sub', 'and', 'or', 'xor') else "")
     if op == 0xD:
         return [f"trace 0x{imm:02x}", f"trace r{rd}", f"mbox r{rd}", "done"][sub]

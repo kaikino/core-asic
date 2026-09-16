@@ -6,25 +6,30 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-PROJECT_SOURCES = tt_um_kaikino_protocol_emu.sv proto_cfg_serial.sv proto_program_ram.sv proto_pio_engine.sv proto_trace_ram.sv
+PROJECT_SOURCES = tt_um_kaikino_protocol_emu.sv proto_cfg_serial.sv proto_program_ram.sv proto_pio_engine.sv proto_trace_ram.sv proto_delay_chain.sv proto_tdc.sv proto_dtc.sv
 
 ifeq ($(FPGA),yes)
 
 # iCE40 post-synthesis netlist simulation (make fpga_netlist first):
 SIM_BUILD				= sim_build/fpga
+export PROTO_TDLY_PS := 0
 VERILOG_SOURCES += $(shell yosys-config --datdir)/ice40/cells_sim.v
 VERILOG_SOURCES += $(PWD)/fpga_netlist.v
 
 else ifneq ($(GATES),yes)
 
-# RTL simulation:
+# RTL simulation: the delay lines get a behavioural 224 ps/stage model so the
+# sub-clock timing features can be checked against the reference model.
 SIM_BUILD				= sim_build/rtl
+COMPILE_ARGS    += -DTDLY_PS=224
+export PROTO_TDLY_PS := 224
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 
 else
 
-# Gate level simulation:
+# Gate level simulation (the cell models are zero-delay, so the delay lines are too):
 SIM_BUILD				= sim_build/gl
+export PROTO_TDLY_PS := 0
 COMPILE_ARGS    += -DGL_TEST
 COMPILE_ARGS    += -DFUNCTIONAL
 COMPILE_ARGS    += -DSIM

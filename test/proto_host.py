@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 
-from cocotb.triggers import ClockCycles, NextTimeStep, ReadOnly, RisingEdge
+from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge, Timer
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
 from proto_ref import (  # noqa: E402
@@ -90,7 +90,9 @@ class Harness:
             self.cycle += 1
             if self.compare:
                 self.check()
-            await NextTimeStep()
+            # Pads are driven exactly 1 ns after the edge (PAD_EDGE_OFFSET_PS in
+            # the model) so the TDC fine times of input edges are predictable.
+            await Timer(1, unit="ns")
             if self.after_tick:
                 self.after_tick(self)
 

@@ -22,6 +22,9 @@ project:
     - "proto_cfg_serial.sv"
     - "proto_program_ram.sv"
     - "proto_trace_ram.sv"
+    - "proto_delay_chain.sv"
+    - "proto_tdc.sv"
+    - "proto_dtc.sv"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).

@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 `default_nettype none
 
 // Deterministic 16-bit PIO engine.  Every instruction retires in exactly one
@@ -9,7 +10,9 @@
 //  0 NOP
 //  1 MOVI  rd, imm8
 //  2 OUT   rs, tgt, mask8      tgt = (tgt & ~mask) | (rs & mask)
-//  3 IN    rd, src             0 UIO_IN, 1 AUX, 2 MBOX (pops), 3 UIO_DATA
+//  3 IN    rd, src             0 UIO_IN, 1 AUX, 2 MBOX (pops), 3: imm[1:0] =
+//                              0 UIO_DATA, 1 TDC0 fine time, 2 TDC1 fine time,
+//                              3 {6'b0, TDC1 level, TDC0 level}
 //  4 DELAY mode, imm8|rs       0 imm, 1 rs, 2 imm<<4, 3 rs<<4 extra stall cycles
 //  5 WAIT  cond, pin           0 LOW, 1 HIGH, 2 RISE, 3 FALL
 //  6 JMP   addr8
@@ -28,7 +31,8 @@
 //                              5 XOR 6 MOVC 7 NOT 8 CRCU (fold rd into the
 //                              CRC-32) 9 CRCI (init CRC) 10 CRCB rd,k (rd =
 //                              FCS byte imm[5:4]) 11 POP rd (rd = next data
-//                              FIFO byte, C = byte was valid)
+//                              FIFO byte, C = byte was valid) 12 DTCW rd, ch
+//                              (delay-line tap for DTC channel imm[4] = rd)
 //  D EVT   sub, imm8|rs        0 TRACE imm, 1 TRACE rs, 2 MBOX <= rs, 3 DONE
 //  E HALT                      stop and release every output enable
 //  F (illegal)                 HALT plus a sticky fault
@@ -67,7 +71,12 @@ module proto_pio_engine (
     output wire        fifo_pop,
     output wire        crc_init,
     output wire        crc_update,
-    output wire [7:0]  crc_byte
+    output wire [7:0]  crc_byte,
+    // Sub-clock timing: latched TDC results in, DTC tap writes out.
+    input  wire [17:0] tdc_word,   // {lvl1, lvl0, fine1[7:0], fine0[7:0]}
+    output wire        dtc_we,
+    output wire        dtc_ch,
+    output wire [7:0]  dtc_data
 );
   reg [7:0]  program_counter;
   reg [11:0] delay_count;
@@ -105,6 +114,12 @@ module proto_pio_engine (
   assign crc_init   = alu_op & (imm[3:0] == 4'd9);
   assign crc_update = alu_op & (imm[3:0] == 4'd8);
   assign crc_byte   = rd_val;
+  assign dtc_we     = alu_op & (imm[3:0] == 4'd12);
+  assign dtc_ch     = imm[4];
+  assign dtc_data   = rd_val;
+  wire [7:0] in3_val = (imm[1:0] == 2'd0) ? uio_data :
+                       (imm[1:0] == 2'd1) ? tdc_word[7:0] :
+                       (imm[1:0] == 2'd2) ? tdc_word[15:8] : {6'd0, tdc_word[17:16]};
   wire [7:0] fcs_sel   = fcs[imm[5:4]*8 +: 8];
 
   wire [7:0] setp_mask = 8'd1 << imm[2:0];
@@ -169,7 +184,7 @@ module proto_pio_engine (
                 2'd0: regs[rd] <= pin_in[7:0];
                 2'd1: regs[rd] <= aux;
                 2'd2: begin regs[rd] <= mbox_in; mbox_in_take <= 1'b1; end
-                2'd3: regs[rd] <= uio_data;
+                2'd3: regs[rd] <= in3_val;
               endcase
               program_counter <= pc_next;
             end
@@ -218,7 +233,7 @@ module proto_pio_engine (
                 4'd7: regs[rd] <= ~rd_val;
                 4'd10: regs[rd] <= fcs_sel;
                 4'd11: begin regs[rd] <= fifo_data; carry <= fifo_valid; end
-                default: ;  // 8 CRCU, 9 CRCI act through crc_update/crc_init
+                default: ;  // 8 CRCU, 9 CRCI, 12 DTCW act through their pulses
               endcase
               program_counter <= pc_next;
             end

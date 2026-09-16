@@ -31,6 +31,11 @@
   "//": "https://tinytapeout.com/faq/#how-can-i-map-an-additional-external-clock-to-one-of-the-gpios",
   "CLOCK_PORT": "clk",
 
+  "//": "Sub-clock timing delay lines: keep the resizer off them and time them as false paths.",
+  "RSZ_DONT_TOUCH_RX": ".*tdly.*",
+  "PNR_SDC_FILE": "dir::proto.sdc",
+  "SIGNOFF_SDC_FILE": "dir::proto.sdc",
+
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",

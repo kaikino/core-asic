@@ -1,0 +1,23 @@
+; Sub-clock edge timer: traces the fine arrival time of every edge on
+; TARGET_IN0 so the host can measure pulse widths and setup/hold margins
+; far below the 25 ns clock period.
+;
+; Host setup: CMD_TIMING selects TARGET_IN0 (source 8) for TDC channel 0 and
+; enables its trace entries; RUN arms the capture.  Each edge then produces
+; a kind-2 trace entry {timestamp, level, fine} without any program at all.
+; This program adds an engine-side use: it converts fine times to a byte in
+; the mailbox for a host that polls rather than reads the trace, and shows
+; how a program can branch on a timing measurement.
+.equ LIMIT 60                        ; stages; ~13 ns at the typical corner
+        in    r2, TDCLVL             ; wait for the calibration/idle level
+loop:   wait  RISE, IN0
+        in    r0, TDC0               ; stages between the edge and the clock sample
+        mbox  r0
+        movi  r1, LIMIT
+        sub   r1, r0                 ; C = borrow = (LIMIT < fine)
+        movc  r3
+        jz    r3, early
+        trace 0xEE                   ; edge came later in the period than LIMIT
+        jmp   loop
+early:  trace 0xE0
+        jmp   loop

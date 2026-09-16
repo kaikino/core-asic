@@ -16,7 +16,7 @@ class AssemblerTest(unittest.TestCase):
                  "delay r1", "delay 12*16", "wait RISE, GPIO5", "jmp 0x10", "djnz r0, 0x03",
                  "jph TRIG, 0x22", "jpl IN2, 0x01", "setp UO, 6, 1", "setp UIO_OE, 2, C",
                  "shout_msb r0, UO, 0, INV", "shout_lsb r2, UIO, 7", "shl r1", "shin_lsb r0, IN0",
-                 "add r0, r1", "movc r3", "not r2", "crcu r1", "crci", "crcb r2, 3", "pop r0", "trace 0x42", "trace r1", "mbox r0", "done", "halt"]
+                 "add r0, r1", "movc r3", "not r2", "crcu r1", "crci", "crcb r2, 3", "pop r0", "in r0, TDC0", "in r1, TDCLVL", "dtcw r3, 1", "trace 0x42", "trace r1", "mbox r0", "done", "halt"]
         for line in lines:
             word = assemble(line)
             self.assertEqual(assemble(disassemble(word)), word, line)

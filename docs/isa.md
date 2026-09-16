@@ -52,7 +52,7 @@ Pin numbers used by `WAIT`, `JPH`, `JPL` and `SHIN`:
 | 0 | `nop` | |
 | 1 | `movi rd, imm8` | `rd = imm` |
 | 2 | `out rs, TGT[, mask8]` | `TGT = (TGT & ~mask) \| (rs & mask)`; TGT is `UIO`, `UIO_OE`, `UO`, `UO_OE` |
-| 3 | `in rd, SRC` | SRC: `UIO_IN` (pins 7..0), `AUX`, `MBOX` (pops the host byte), `UIO_DATA` (readback) |
+| 3 | `in rd, SRC` | SRC: `UIO_IN` (pins 7..0), `AUX`, `MBOX` (pops the host byte), `UIO_DATA` (readback), `TDC0` / `TDC1` (fine time of the channel's last edge, in delay-line stages), `TDCLVL` (`{TDC1 level, TDC0 level}`) |
 | 4 | `delay imm8` / `delay rs` / `delay imm8*16` / `delay rs*16` | stall that many extra clocks |
 | 5 | `wait COND, pin` | COND `LOW`, `HIGH`, `RISE`, `FALL`; stall until true |
 | 6 | `jmp addr8` | |
@@ -68,6 +68,7 @@ Pin numbers used by `WAIT`, `JPH`, `JPL` and `SHIN`:
 | C | `movc rd` / `not rd` | `rd = C` / `rd = ~rd` |
 | C | `pop rd` | `rd` = next byte of the host data FIFO, `C` = byte was valid; in FCS mode the four bytes after the data are the CRC-32 FCS |
 | C | `crci` / `crcu rd` / `crcb rd, k` | CRC-32: initialise / fold `rd` in / `rd` = FCS byte `k` (0 = first on the wire) |
+| C | `dtcw rd, ch` | DTC channel `ch` delay tap = `rd` stages |
 | D | `trace imm8` / `trace rs` | write a timestamped event to the trace buffer |
 | D | `mbox rs` | post a byte to the host mailbox |
 | D | `done` | set the engine's DONE status flag |
@@ -105,6 +106,7 @@ that value is captured while `CFG_CS_N` is high, so read with two frames:
 | 7 | CAPTURE | `[12:0]` watched pins (bit 12 = TRIGGER_IN), `[15:13]` trigger source, `[16]` capture pin changes, `[17]` stop when full |
 | 8 | READSEL | `[2:0]` readback register |
 | 9 | FIFO | `[7:0]` byte, `[8]` push, `[9]` reset FIFO and CRC, `[10]` FCS mode (fold every popped byte into the CRC and return the FCS after the data) |
+| A | TIMING | `[27]` channel; `[26]=0` TDC: `[3:0]` source (0-7 GPIO, 8-11 TARGET_IN, 12 TRIGGER_IN, 13 calibration toggle, 15 off), `[8]` trace its edges; `[26]=1` DTC: `[2:0]` TARGET_OUT pin, `[8]` enable, `[23:16]` delay tap |
 
 Trigger sources: 0 immediately on arm, 1 TRIGGER_IN rising, 2 TRIGGER_IN
 falling, 3 engine 0 `trace`, 4 engine 1 `trace`, 5 any watched pin change.
@@ -115,9 +117,10 @@ Readback registers:
 |---|----------|
 | 0 | STATUS: `[0]` run0 `[1]` run1 `[2]` done0 `[3]` done1 `[4]` collision fault `[5]` permission fault `[6]` illegal0 `[7]` illegal1 `[8]` mbox0 unread by engine `[9]` mbox1 unread `[10]` mbox0 pending to host `[11]` mbox1 pending `[12]` armed `[13]` triggered `[14]` overflow `[15]` full `[21:16]` entries `[31:24]` version (0x10) |
 | 1 | `[7:0]` mailbox from engine 0, `[15:8]` from engine 1, `[23:16]` pc0, `[31:24]` pc1 |
-| 2 | trace entry at TRACEPTR: `[31:16]` timestamp, `[14]` pin-capture kind, `[13]` engine, `[12:0]` pins or `[7:0]` event data |
+| 2 | trace entry at TRACEPTR: `[31:16]` timestamp, `[15:14]` kind (0 engine event `{[13] engine, [7:0] data}`, 1 pin capture `{[12:0] pins}`, 2 timed edge `{[13] channel, [12] level, [11:4] fine}`) |
 | 3 | `[15:0]` timestamp, `[20:16]` trace write pointer, `[21]` FCS mode, `[29:22]` FIFO level |
 | 4 | ID `0x50494F31` ("PIO1") |
+| 5 | `[7:0]` TDC0 fine, `[15:8]` TDC1 fine, `[16]` TDC0 level, `[17]` TDC1 level, `[31:24]` delay-line length in stages |
 
 ## Data FIFO and CRC-32
 
@@ -132,6 +135,36 @@ mode, by every data byte popped; once the FIFO is empty the next four pops
 return the FCS least-significant byte first, which is Ethernet wire order.
 `crcb rd, k` reads the same bytes explicitly for other framings.  The CRC-32
 check value of "123456789" is `0xCBF43926`.
+
+## Sub-clock timing
+
+The engines act on clock edges, 25 ns apart.  Two tapped delay lines of 176
+CMOS5L delay cells (about 0.15 / 0.22 / 0.35 ns per stage at the fast /
+typical / slow corner) let programs and the host see and place edges
+*between* clock edges.
+
+* **TDC (time-to-digital) channels 0 and 1** each watch one source selected
+  with TIMING.  On every clock the taps are sampled; the number of stages the
+  latest edge has already travelled is its arrival time within the period,
+  counted in stages.  When the synchronised level changes, that count and the
+  new level are latched (`in rd, TDC0`, readback register 5) and, if enabled
+  and a capture is armed, written to the trace buffer as a kind-2 entry with
+  the coarse timestamp.  Counting ones is immune to metastability bubbles.
+* **Calibration.** Source 13 is a flop that toggles every clock, so its edges
+  are exactly one period apart; its fine value is the number of stages per
+  25 ns on this die at this voltage and temperature, the constant that turns
+  stage counts into nanoseconds.
+* **DTC (digital-to-time) channels 0 and 1** each replace one TARGET_OUT pin
+  with a copy delayed by a programmable tap (TIMING, or `dtcw` from a
+  program), so an edge lands `tap` stages after the clock edge that launched
+  it.  Taps longer than a period are allowed; the pin simply lags by more
+  than one clock.
+
+A measured time is `coarse * 25 ns - fine * stage`, with `stage = 25 ns /
+calibration`.  `examples/edge_timer.pio` and `examples/glitch_pulse.pio` show
+the two directions.  The chains are asynchronous by construction: they are
+false paths in `src/proto.sdc` and protected from the resizer by
+`RSZ_DONT_TOUCH_RX` in `src/config.json`.
 
 ## Safe pin sharing
 

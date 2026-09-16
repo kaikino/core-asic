@@ -33,6 +33,12 @@ are all just programs.
   protocol can stream a frame loaded ahead of time; a hardware CRC-32 folds
   the bytes in and hands back the Ethernet FCS, or serves other framings
   through explicit instructions.
+* **Sub-clock timing.** Two tapped delay lines (176 CMOS5L delay cells
+  each) time input edges and place output edges at about 0.2 ns resolution
+  from the 40 MHz clock, self-calibrated against the clock period.  A
+  program or the host reads the arrival time of an edge, edges can be
+  traced with fine timestamps, and a chosen output can be shifted by a
+  programmable number of stages.
 * **Trace and trigger.** A 32-entry buffer stores timestamped engine events
   and, once armed and triggered (immediately, TRIGGER_IN edge, engine event or
   watched-pin change), every change of the watched pins: a small logic

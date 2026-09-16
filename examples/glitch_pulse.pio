@@ -1,0 +1,16 @@
+; Fault-injection style pulse generator with sub-clock placement.
+; Waits for TRIGGER_IN, then emits one 25 ns pulse on TARGET_OUT0 whose
+; edges are shifted by a programmable number of delay-line stages (about
+; 0.22 ns each at the typical corner).  The host sets DTC channel 0 to
+; TARGET_OUT0 (CMD_TIMING) and sends the tap in the mailbox; combined with
+; DELAY that gives coarse steps of 25 ns and fine steps of one stage.
+        setp  UO_OE, 0, 1
+        wait  HIGH, MBOX_IN
+        in    r0, MBOX               ; fine offset in stages
+        dtcw  r0, 0
+loop:   wait  RISE, TRIG
+        delay 2                      ; coarse offset: 3 clocks after the trigger sample
+        setp  UO, 0, 1
+        setp  UO, 0, 0               ; one clock wide, both edges delayed by r0 stages
+        done
+        jmp   loop

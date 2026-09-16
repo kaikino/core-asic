@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 `default_nettype none
 
 // Host control link: SPI mode 0 slave (CPOL=0, CPHA=0), 32-bit frames, MSB

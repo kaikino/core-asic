@@ -11,9 +11,26 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import os
+
 TRACE_DEPTH = 32
 PROG_DEPTH = 128  # words per engine; PC bit 7 is ignored by the memory
 FIFO_DEPTH = 128
+TDLY_STAGES = 176
+CLOCK_PS = 25000
+# Delay-line picoseconds per stage as simulated: the RTL run defines TDLY_PS=224;
+# gate-level and FPGA netlists have zero-delay chains (PROTO_TDLY_PS=0).
+TDLY_PS = int(os.environ.get("PROTO_TDLY_PS", "224"))
+# The harness drives pads this long after the clock edge, so an input edge seen
+# at a sample is that far short of a full period old.
+PAD_EDGE_OFFSET_PS = 1000
+
+
+def fine_count(age_ps: int) -> int:
+    """Taps reached by an edge `age_ps` before the sample (the TDC's ones count)."""
+    if TDLY_PS == 0:
+        return TDLY_STAGES
+    return min(TDLY_STAGES, age_ps // TDLY_PS)
 
 
 def crc32_byte(crc: int, byte: int) -> int:
@@ -58,13 +75,17 @@ class Engine:
         self.fifo_data = 0
         self.fifo_valid = False
         self.fcs = 0
+        self.tdc_word = 0
+        self.dtc_we = False
+        self.dtc_ch = 0
+        self.dtc_data = 0
 
     def step(self, instr: int, pin_in: int, pin_prev: int, mbox_in: int,
              start: bool, start_pc: int, stop: bool, clear_done: bool) -> None:
         self.trace_we = False
         self.mbox_in_take = False
         self.mbox_out_we = False
-        self.fifo_pop = self.crc_init = self.crc_update = False
+        self.fifo_pop = self.crc_init = self.crc_update = self.dtc_we = False
         if clear_done:
             self.done = False
         if stop:
@@ -108,7 +129,9 @@ class Engine:
             if sub == 0: self.regs[rd] = pin_in & 0xFF
             elif sub == 1: self.regs[rd] = (pin_in >> 8) & 0xFF
             elif sub == 2: self.regs[rd] = mbox_in; self.mbox_in_take = True
-            else: self.regs[rd] = o.uio_data
+            else:
+                self.regs[rd] = [o.uio_data, self.tdc_word & 0xFF, (self.tdc_word >> 8) & 0xFF,
+                                 (self.tdc_word >> 16) & 3][imm & 3]
             self.pc = nxt
         elif op == 0x4:
             base = rd_val if sub & 1 else imm
@@ -170,6 +193,8 @@ class Engine:
             elif fn == 10: self.regs[rd] = (self.fcs >> (8 * ((imm >> 4) & 3))) & 0xFF
             elif fn == 11:
                 self.regs[rd] = self.fifo_data; self.carry = int(self.fifo_valid); self.fifo_pop = True
+            elif fn == 12:
+                self.dtc_we = True; self.dtc_ch = (imm >> 4) & 1; self.dtc_data = rd_val
             self.pc = nxt
         elif op == 0xD:
             if sub == 0: self.trace_we = True; self.trace_data = imm
@@ -238,11 +263,21 @@ def cmd_readsel(sel: int) -> int:
     return (0x8 << 28) | (sel & 7)
 
 
+def cmd_tdc(channel: int, source: int, trace: bool = False) -> int:
+    """TIMING frame: TDC channel source (0-12 pins, 13 calibration toggle)."""
+    return (0xA << 28) | (channel << 27) | (int(trace) << 8) | (source & 0xF)
+
+
+def cmd_dtc(channel: int, pin: int, enable: bool, tap: int = 0) -> int:
+    """TIMING frame: DTC channel drives TARGET_OUT<pin> delayed by `tap` stages."""
+    return (0xA << 28) | (channel << 27) | (1 << 26) | ((tap & 0xFF) << 16) | (int(enable) << 8) | (pin & 7)
+
+
 def cmd_fifo(data: int = 0, push: bool = False, reset: bool = False, fcs_mode: bool = False) -> int:
     return (0x9 << 28) | (int(fcs_mode) << 10) | (int(reset) << 9) | (int(push) << 8) | (data & 0xFF)
 
 
-READ_STATUS, READ_MBOX, READ_TRACE, READ_TIME, READ_ID = 0, 1, 2, 3, 4
+READ_STATUS, READ_MBOX, READ_TRACE, READ_TIME, READ_ID, READ_TIMING = 0, 1, 2, 3, 4, 5
 
 
 class Chip:
@@ -272,6 +307,22 @@ class Chip:
         self.trace_rptr = 0
         self.trace_count = 0
         self.read_sel = 0
+        # sub-clock timing
+        self.tdc_src = [15, 15]
+        self.tdc_trace_en = [False, False]
+        self.tdc_fine = [0, 0]
+        self.tdc_level = [0, 0]
+        self.tdc_level_prev = [0, 0]
+        self.tdc_s1 = [(0, 0), (0, 0)]   # (fine, level) stage 1 (sampled at the last edge)
+        self.tdc_s2 = [(0, 0), (0, 0)]   # stage 2 (what fine_now/level_now show)
+        self.tdc_age = [10 ** 9, 10 ** 9]  # ps since the source's last edge, per channel
+        self.tdc_last_in = [0, 0]
+        self.dtc_pin = [0, 0]
+        self.dtc_en = [False, False]
+        self.dtc_tap = [0, 0]
+        self.cal_toggle = 0
+        self.uo_history = [0, 0, 0]        # uo_target after the last three edges, newest first
+        self.pins_raw_prev = 0
         self.fifo = []          # bytes in order, head first
         self.fcs_mode = False
         self.fcs_done = False
@@ -313,8 +364,18 @@ class Chip:
 
     @property
     def uo_out(self) -> int:
-        """uo_out[7:1]; bit 0 (MISO) is owned by the serial link."""
-        return self._arbitrate()[2] << 1
+        """uo_out[7:1] as seen just after a clock edge; bit 0 (MISO) is the link's."""
+        uo = self._arbitrate()[2]
+        for c in (1, 0):   # channel 0 has priority when both pick the same pin
+            if self.dtc_en[c]:
+                d = self.dtc_tap[c] * TDLY_PS
+                back = 0 if d == 0 else -(-d // CLOCK_PS)   # ceil(d / period)
+                # uo_history[0] is the value after the latest edge (== uo),
+                # [1] the edge before, [2] two edges before.
+                src = uo if back == 0 else self.uo_history[min(back, 2)]
+                bit = (src >> self.dtc_pin[c]) & 1
+                uo = (uo & ~(1 << self.dtc_pin[c])) | (bit << self.dtc_pin[c])
+        return uo << 1
 
     def status_word(self) -> int:
         e0, e1 = self.eng
@@ -334,6 +395,9 @@ class Chip:
             return self.trace[self.trace_rptr]
         if sel == READ_TIME:
             return (len(self.fifo) << 22) | (int(self.fcs_mode) << 21) | (self.trace_wptr << 16) | self.timestamp
+        if sel == READ_TIMING:
+            return ((TDLY_STAGES << 24) | (self.tdc_level[1] << 17) | (self.tdc_level[0] << 16)
+                    | (self.tdc_fine[1] << 8) | self.tdc_fine[0])
         return 0x50494F31
 
     # -- one clock edge ----------------------------------------------------
@@ -362,8 +426,15 @@ class Chip:
             fifo_data, fifo_valid = (fcs >> (8 * self.fcs_idx)) & 0xFF, True
         else:
             fifo_data, fifo_valid = 0, False
+        # TDC values visible during this cycle (sampled two edges ago)
+        fine_now = [self.tdc_s2[c][0] for c in range(2)]
+        level_now = [self.tdc_s2[c][1] for c in range(2)]
+        tdc_edge = [level_now[c] ^ self.tdc_level_prev[c] for c in range(2)]
+        tdc_word = ((self.tdc_level[1] << 17) | (self.tdc_level[0] << 16)
+                    | (self.tdc_fine[1] << 8) | self.tdc_fine[0])
         for g in range(2):
             e[g].fifo_data, e[g].fifo_valid, e[g].fcs = fifo_data, fifo_valid, fcs
+            e[g].tdc_word = tdc_word
             e[g].step(self.imem[g][e[g].pc % PROG_DEPTH], pin_in[g], pin_prev[g], self.mbox_tx[g],
                       self._start[g], self.start_pc, self._stop[g], self._clear_done)
         # FIFO pop / CRC (combinational requests, applied at this edge)
@@ -393,22 +464,54 @@ class Chip:
 
         # trigger / capture
         ev0, ev1 = pulses[0][0], pulses[1][0]
+        uo_now = self._arbitrate()[2]
         trig_hit = [True, trig_rise, trig_fall, ev0, ev1, pin_change != 0, False, False][self.trig_src]
         capturing = self.triggered or (self.armed and trig_hit)
         want_pin = capturing and self.pin_capture_en and pin_change != 0
+        want_tdc = [capturing and self.tdc_trace_en[c] and bool(tdc_edge[c]) for c in range(2)]
         full = self.trace_count >= TRACE_DEPTH
         block = full and self.stop_on_full
-        want = ev0 or ev1 or want_pin
+        wants = [ev0, ev1, want_tdc[0], want_tdc[1], want_pin]
+        want = any(wants)
         we = want and not block
-        drop = (want and block) or (ev0 and (ev1 or want_pin)) or (ev1 and want_pin)
+        drop = (want and block) or sum(wants) > 1
         if ev0:
             wdata = (self.timestamp << 16) | pulses[0][1]
         elif ev1:
             wdata = (self.timestamp << 16) | (1 << 13) | pulses[1][1]
+        elif want_tdc[0]:
+            wdata = (self.timestamp << 16) | (2 << 14) | (level_now[0] << 12) | (fine_now[0] << 4)
+        elif want_tdc[1]:
+            wdata = (self.timestamp << 16) | (2 << 14) | (1 << 13) | (level_now[1] << 12) | (fine_now[1] << 4)
         else:
             wdata = (self.timestamp << 16) | (1 << 14) | self.pins_q
 
         # sequential updates of top-level state
+        # -- sub-clock timing: latch results, DTC writes, then advance the TDC pipeline
+        for c in range(2):
+            self.tdc_level_prev[c] = level_now[c]
+            if tdc_edge[c]:
+                self.tdc_fine[c], self.tdc_level[c] = fine_now[c], level_now[c]
+        if e[0].dtc_we:
+            self.dtc_tap[e[0].dtc_ch] = e[0].dtc_data
+        elif e[1].dtc_we:
+            self.dtc_tap[e[1].dtc_ch] = e[1].dtc_data
+        for c in range(2):
+            src = self.tdc_src[c]
+            if src == 13:
+                value, age = self.cal_toggle, CLOCK_PS          # toggles exactly one period apart
+            elif src <= 12:
+                value = (pins_raw >> src) & 1
+                changed = value != ((self.pins_raw_prev >> src) & 1)
+                age = CLOCK_PS - PAD_EDGE_OFFSET_PS if changed else self.tdc_age[c] + CLOCK_PS
+            else:
+                value, age = 0, self.tdc_age[c] + CLOCK_PS
+            self.tdc_age[c] = min(age, 10 ** 9)
+            self.tdc_s2[c] = self.tdc_s1[c]
+            self.tdc_s1[c] = (fine_count(self.tdc_age[c]), value)
+        self.cal_toggle ^= 1
+        self.pins_raw_prev = pins_raw
+        self.uo_history = [uo_now] + self.uo_history[:2]
         self.pins_s1, self.pins_q, self.pins_qq = pins_raw, self.pins_s1, self.pins_q
         self.timestamp = (self.timestamp + 1) & 0xFFFF
         if collision:
@@ -487,6 +590,15 @@ class Chip:
             self.stop_on_full = bool(c.bit(17))
         elif k == 0x8:
             self.read_sel = c.bits(2, 0)
+        elif k == 0xA:
+            ch = c.bit(27)
+            if not c.bit(26):
+                self.tdc_src[ch] = c.bits(3, 0)
+                self.tdc_trace_en[ch] = bool(c.bit(8))
+            else:
+                self.dtc_pin[ch] = c.bits(2, 0)
+                self.dtc_en[ch] = bool(c.bit(8))
+                self.dtc_tap[ch] = c.bits(23, 16)
         elif k == 0x9:
             self.fcs_mode = bool(c.bit(10))
             if c.bit(9):

@@ -86,3 +86,42 @@ async def test_constrained_random(dut):
         assert entries == h.model.trace[:n], "trace buffer matches the model"
         dut._log.info(f"seed {seed}: {h.cycle} cycles, {n} trace entries, status {status:08x}")
         dut.rst_n.value = 0
+
+
+@cocotb.test()
+async def test_random_with_timing_channels(dut):
+    """Random programs with random TDC sources, trace-enabled edges and DTC taps.
+
+    Simulating the delay lines is expensive (every input edge schedules 176
+    events per chain), so this test is short by default; raise RANDOM_SEEDS and
+    RANDOM_CYCLES for a longer soak."""
+    from proto_ref import cmd_dtc, cmd_tdc
+    seeds = int(os.environ.get("RANDOM_SEEDS", "2"))
+    cycles = int(os.environ.get("RANDOM_CYCLES", "300"))
+    for seed in range(seeds):
+        rng = random.Random(5000 + seed)
+        h = await setup(dut)
+        await h.load(0, random_program(rng))
+        await h.load(1, random_program(rng))
+        await h.xfer(cmd_tdc(0, rng.choice([8, 9, 10, 11, 12]), trace=True))
+        await h.xfer(cmd_tdc(1, rng.randrange(13), trace=bool(rng.randrange(2))))
+        await h.xfer(cmd_dtc(0, rng.randrange(7), bool(rng.randrange(2)), rng.randrange(180)))
+        await h.xfer(cmd_dtc(1, rng.randrange(7), bool(rng.randrange(2)), rng.randrange(180)))
+        await h.xfer(cmd_capture(watch=rng.randrange(1 << 13), trig_src=0, pin_capture=bool(rng.randrange(2))))
+        await h.xfer(cmd_run(start0=True, start1=True, arm=True))
+
+        def noise(hh, rng=rng):
+            if rng.random() < 0.2:
+                hh.uio_in = rng.randrange(256)
+            if rng.random() < 0.2:
+                hh.ui_target = rng.randrange(32)
+        h.after_tick = noise
+        await h.tick(cycles)
+        h.after_tick = None
+        await h.xfer(cmd_run(stop0=True, stop1=True))
+        status = await h.read(READ_STATUS)
+        n = min(TRACE_DEPTH, (status >> 16) & 0x3F)
+        entries = await read_trace(h, n)
+        assert entries == h.model.trace[:n], "trace buffer incl. timed edges matches the model"
+        dut._log.info(f"seed {seed}: {n} trace entries, kinds {[(e >> 14) & 3 for e in entries]}")
+        dut.rst_n.value = 0

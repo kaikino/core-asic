@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 `default_nettype none
 
 // Circular capture store.  Entry: {timestamp[15:0], kind[1:0], engine, data[12:0]}.
