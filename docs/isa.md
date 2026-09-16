@@ -138,7 +138,7 @@ check value of "123456789" is `0xCBF43926`.
 
 ## Sub-clock timing
 
-The engines act on clock edges, 25 ns apart.  Two tapped delay lines of 176
+The engines act on clock edges, 25 ns apart.  Two tapped delay lines of 128
 CMOS5L delay cells (about 0.15 / 0.22 / 0.35 ns per stage at the fast /
 typical / slow corner) let programs and the host see and place edges
 *between* clock edges.
@@ -150,18 +150,20 @@ typical / slow corner) let programs and the host see and place edges
   new level are latched (`in rd, TDC0`, readback register 5) and, if enabled
   and a capture is armed, written to the trace buffer as a kind-2 entry with
   the coarse timestamp.  Counting ones is immune to metastability bubbles.
-* **Calibration.** Source 13 is a flop that toggles every clock, so its edges
-  are exactly one period apart; its fine value is the number of stages per
-  25 ns on this die at this voltage and temperature, the constant that turns
-  stage counts into nanoseconds.
+* **Calibration.** Source 13 is a flop that toggles on the falling clock
+  edge, so every sample sees an edge exactly half a period old; its fine
+  value is the number of stages per 12.5 ns on this die at this voltage and
+  temperature, the constant that turns stage counts into nanoseconds.
 * **DTC (digital-to-time) channels 0 and 1** each replace one TARGET_OUT pin
   with a copy delayed by a programmable tap (TIMING, or `dtcw` from a
   program), so an edge lands `tap` stages after the clock edge that launched
   it.  Taps longer than a period are allowed; the pin simply lags by more
   than one clock.
 
-A measured time is `coarse * 25 ns - fine * stage`, with `stage = 25 ns /
-calibration`.  `examples/edge_timer.pio` and `examples/glitch_pulse.pio` show
+A measured time is `coarse * 25 ns - fine * stage`, with `stage = 12.5 ns /
+calibration`.  128 stages cover a whole period at the typical and slow
+corners and about 80 % of it at the fast corner, where older edges read as
+128 (saturated) but are still timestamped coarsely.  `examples/edge_timer.pio` and `examples/glitch_pulse.pio` show
 the two directions.  The chains are asynchronous by construction: they are
 false paths in `src/proto.sdc` and protected from the resizer by
 `RSZ_DONT_TOUCH_RX` in `src/config.json`.

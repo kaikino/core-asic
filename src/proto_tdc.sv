@@ -14,7 +14,7 @@
 // before the count is registered, and even then only shifts the count by one.
 // Registering the count rather than the taps halves the flop count.
 module proto_tdc #(
-    parameter integer STAGES = 176
+    parameter integer STAGES = 128
 ) (
     input  wire              clk,
     input  wire              rst_n,

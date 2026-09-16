@@ -746,7 +746,7 @@ limitation this design shares with every PIO-style engine, and the part of
 the chip that removes it is also the only part that is not ordinary digital
 logic.
 
-**The delay line (`proto_delay_chain.sv`).** A chain of 176 delay cells from
+**The delay line (`proto_delay_chain.sv`).** A chain of 128 delay cells from
 the CMOS5L library, each instantiated by name:
 
 ```systemverilog
@@ -764,7 +764,7 @@ repair has no reason to touch it. Without those two lines the tools removed
 most of the chain in the first experiment (`experiments/tdc/README.md`).
 
 **Measuring an edge (`proto_tdc.sv`).** Feed a pin into the chain and sample
-all 176 taps on the clock edge. If the pin rose 8 ns before the edge, the
+all 128 taps on the clock edge. If the pin rose 8 ns before the edge, the
 first 36 taps already show the new level and the rest still show the old
 one. Counting the taps that match the new level gives the arrival time in
 units of one stage:
@@ -776,29 +776,33 @@ for (k = 0; k < STAGES; k = k + 1) cnt = cnt + matched[k];
 
 Counting rather than looking for the boundary matters: a tap sampled exactly
 as it changes can come out wrong (metastability), which shows up as a bubble
-in the pattern, and a count is off by at most one either way. The samples
-also pass through two flops, exactly like the ordinary input synchronisers,
-so the count lines up with the synchronised pin that the rest of the chip
-sees. The top level latches the count and level whenever that pin changes,
+in the pattern, and a count is off by at most one either way. The taps are
+sampled once and the *count* is registered a clock later (a metastable tap
+gets that whole clock to settle), which puts the result two flops behind the
+pad, exactly like the ordinary input synchronisers, so it lines up with the
+synchronised pin that the rest of the chip sees. An earlier version stored
+the taps twice; halving those flops was what let the layout route. The top level latches the count and level whenever that pin changes,
 exposes them to programs (`in rd, TDC0`) and the host (register 5), and can
 write them into the trace buffer next to the coarse timestamp.
 
 **Calibration.** The stage delay varies more than two to one with process,
 voltage and temperature, so counts are only meaningful once the chip knows
-its own stage. Source 13 of each TDC channel is a flop that toggles every
-clock: its edges are exactly 25 ns apart, so its count *is* the number of
-stages per period, measured on this die right now. Every other measurement
-is a ratio against it.
+its own stage. Source 13 of each TDC channel is a flop that toggles on the
+falling clock edge: every sample sees an edge exactly 12.5 ns old, so its
+count *is* the number of stages per half period, measured on this die right
+now. Every other measurement is a ratio against it. (A half period rather
+than a full one keeps the reference inside the 128-stage range even at the
+fast corner, where a full period would need 166 stages.)
 
 **Placing an edge (`proto_dtc.sv`).** The reverse: the value a program wants
-on a TARGET_OUT pin enters a second chain, and a 177-way multiplexer picks
+on a TARGET_OUT pin enters a second chain, and a 129-way multiplexer picks
 the tap that drives the pad. Tap 60 means the pin changes 60 stages, about
 13 ns, after the clock edge that launched it. A program sets the tap with
 `dtcw`; the host with a TIMING frame.
 
 **Simulating something the simulator cannot see.** The foundry's cell models
 are zero-delay, so in a plain simulation every tap changes at once and the
-count is always 176. The RTL build for tests therefore swaps the cells for
+count is always 128. The RTL build for tests therefore swaps the cells for
 `assign #0.224` statements (`-DTDLY_PS=224`), and the reference model
 computes the same counts from the exact times the test harness changes the
 pads (always 1 ns after a clock edge). The fine values are then compared
@@ -995,6 +999,9 @@ loops stay tight.
 neither PIO nor a fixed peripheral can do: time below the clock. They were
 added last because they are the riskiest part of the design for the tools
 (section 13a) and needed a standalone experiment before touching the chip.
+The first integrated version also taught an area lesson: 704 sample flops
+took utilisation from 63 % to 70 % and the router could not close, so the
+TDC registers its count instead of its samples.
 
 **Why did the FIFO get added late?** The first Manchester demo used
 immediates as payload and could not stream a frame. Adding a 128-byte FIFO

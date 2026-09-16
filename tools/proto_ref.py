@@ -16,7 +16,7 @@ import os
 TRACE_DEPTH = 32
 PROG_DEPTH = 128  # words per engine; PC bit 7 is ignored by the memory
 FIFO_DEPTH = 128
-TDLY_STAGES = 176
+TDLY_STAGES = 128
 CLOCK_PS = 25000
 # Delay-line picoseconds per stage as simulated: the RTL run defines TDLY_PS=224;
 # gate-level and FPGA netlists have zero-delay chains (PROTO_TDLY_PS=0).
@@ -499,7 +499,7 @@ class Chip:
         for c in range(2):
             src = self.tdc_src[c]
             if src == 13:
-                value, age = self.cal_toggle, CLOCK_PS          # toggles exactly one period apart
+                value, age = self.cal_toggle, CLOCK_PS // 2     # toggles on the falling edge: half a period old
             elif src <= 12:
                 value = (pins_raw >> src) & 1
                 changed = value != ((self.pins_raw_prev >> src) & 1)

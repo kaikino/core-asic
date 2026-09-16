@@ -22,7 +22,7 @@ CAL = 13  # TDC source: the calibration toggle
 
 @cocotb.test()
 async def test_tdc_calibration(dut):
-    """The calibration source reports how many stages span one clock period."""
+    """The calibration source reports how many stages span half a clock period."""
     h = await setup(dut)
     # Load the reader program first: a toggling chain is slow to simulate.
     prog = assemble_program("in r0, TDC0\nmbox r0\ndone\nhalt").words
@@ -30,11 +30,11 @@ async def test_tdc_calibration(dut):
     await h.xfer(cmd_tdc(0, CAL))
     await h.tick(8)
     word = await h.read(READ_TIMING)
-    stages_per_period = fine_count(CLOCK_PS)
+    stages_per_period = fine_count(CLOCK_PS // 2)   # the reference edge is half a period old
     assert word >> 24 == TDLY_STAGES, "chain length readback"
     assert word & 0xFF == stages_per_period, hex(word)
     if TDLY_PS:
-        assert stages_per_period == 25000 // TDLY_PS
+        assert stages_per_period == 12500 // TDLY_PS
     # An engine can read the same value.
     await h.start(0)
     await h.wait_idle(0)

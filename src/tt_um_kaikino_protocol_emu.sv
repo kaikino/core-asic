@@ -19,7 +19,7 @@ module tt_um_kaikino_protocol_emu #(
     parameter integer TRACE_DEPTH = 32,
     parameter integer TRACE_AW    = 5,
     parameter integer FIFO_AW     = 7,   // 128-byte host-to-engine data FIFO
-    parameter integer TDLY_STAGES = 176  // delay-line length (about one clock period at the fast corner)
+    parameter integer TDLY_STAGES = 128  // delay-line length: > half a period at the fast corner, ~1 period typical
 ) (
     input  wire [7:0] ui_in,
     output wire [7:0] uo_out,
@@ -100,8 +100,9 @@ module tt_um_kaikino_protocol_emu #(
   // ------------------------------------------------------------------
   // Sub-clock timing: two TDC channels (edge arrival time within the
   // clock period) and two DTC channels (edge placement within the period).
-  // Sources 0-12 are the target inputs in pins_raw order, 13 is a toggle
-  // flop whose edges are exactly one period apart, for self-calibration.
+  // Sources 0-12 are the target inputs in pins_raw order; 13 is a flop that
+  // toggles on the falling clock edge, so every rising-edge sample sees an
+  // edge exactly half a period (12.5 ns) old: the self-calibration reference.
   // ------------------------------------------------------------------
   reg  [3:0]  tdc_src [0:1];
   reg         tdc_trace_en [0:1];
@@ -332,7 +333,6 @@ module tt_um_kaikino_protocol_emu #(
       trace_wptr <= {TRACE_AW{1'b0}}; trace_rptr <= {TRACE_AW{1'b0}}; trace_count <= {(TRACE_AW+1){1'b0}};
       fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
       fcs_mode <= 1'b0; fcs_done <= 1'b0; fcs_idx <= 2'd0; crc <= 32'hFFFFFFFF;
-      cal_toggle <= 1'b0;
       for (k = 0; k < 2; k = k + 1) begin
         tdc_src[k] <= 4'd15; tdc_trace_en[k] <= 1'b0; tdc_fine[k] <= 8'd0;
         tdc_level[k] <= 1'b0; tdc_level_prev[k] <= 1'b0;
@@ -359,7 +359,6 @@ module tt_um_kaikino_protocol_emu #(
       if (trace_drop) trace_overflow <= 1'b1;
 
       // Sub-clock timing bookkeeping.
-      cal_toggle <= ~cal_toggle;
       for (k = 0; k < 2; k = k + 1) begin
         tdc_level_prev[k] <= tdc_level_now[k];
         if (tdc_edge[k]) begin tdc_fine[k] <= tdc_fine_now[k]; tdc_level[k] <= tdc_level_now[k]; end
@@ -464,6 +463,13 @@ module tt_um_kaikino_protocol_emu #(
   always @(posedge clk) begin
     if (cfg_request && cmd == CMD_FIFO && cfg_word[8] && !cfg_word[9] && !fifo_full)
       fifo_mem[fifo_wptr] <= cfg_word[7:0];
+  end
+
+  // Calibration reference: toggles on the falling edge, so each rising-edge
+  // sample of the TDC sees an edge exactly half a clock period old.
+  always @(negedge clk or negedge rst_n) begin
+    if (!rst_n) cal_toggle <= 1'b0;
+    else        cal_toggle <= ~cal_toggle;
   end
 
   // A DTC channel replaces its selected TARGET_OUT bit with the delayed copy.

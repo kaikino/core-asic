@@ -17,7 +17,7 @@
 //   SYNTH / FORMAL  chain collapsed to zero delay (no such cells on iCE40;
 //                   formal only needs the surrounding logic)
 module proto_delay_chain #(
-    parameter integer STAGES = 176
+    parameter integer STAGES = 128
 ) (
     input  wire              in,
     output wire [STAGES:0]   tdly_tap
