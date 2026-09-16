@@ -8,9 +8,11 @@
 // resolution of one stage.  Counting ones is inherently tolerant of the
 // "bubbles" that metastable taps produce.
 //
-// Timing of the outputs relative to the top level's input synchronisers:
-// `snap` is stage 1 (like pins_s1), `snap_q` stage 2 (like pins_q), so
-// `fine_now` describes the same sample that pins_q currently shows.
+// The taps are sampled once (stage 1, like pins_s1) and the count is
+// registered (stage 2, like pins_q), so `fine_now` describes the same sample
+// that pins_q currently shows.  A metastable tap has a whole clock to settle
+// before the count is registered, and even then only shifts the count by one.
+// Registering the count rather than the taps halves the flop count.
 module proto_tdc #(
     parameter integer STAGES = 176
 ) (
@@ -23,26 +25,29 @@ module proto_tdc #(
   wire [STAGES:0] tap;
   proto_delay_chain #(.STAGES(STAGES)) chain (.in(in), .tdly_tap(tap));
 
-  reg [STAGES-1:0] snap, snap_q;
+  reg [STAGES-1:0] snap;
   reg              lvl, lvl_q;
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-      snap <= {STAGES{1'b0}}; snap_q <= {STAGES{1'b0}};
-      lvl <= 1'b0; lvl_q <= 1'b0;
-    end else begin
-      snap <= tap[STAGES:1]; snap_q <= snap;   // two flops: async sample, then settle
-      lvl  <= tap[0];        lvl_q  <= lvl;
-    end
-  end
+  reg [7:0]        fine_q;
 
-  // Taps that match the current level were reached by the edge; count them.
-  wire [STAGES-1:0] matched = lvl_q ? snap_q : ~snap_q;
+  // Taps that match the sampled level were reached by the edge; count them.
+  wire [STAGES-1:0] matched = lvl ? snap : ~snap;
   integer k;
   reg [7:0] cnt;
   always @(*) begin
     cnt = 8'd0;
     for (k = 0; k < STAGES; k = k + 1) cnt = cnt + {7'd0, matched[k]};
   end
-  assign fine_now  = cnt;
+
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      snap <= {STAGES{1'b0}}; lvl <= 1'b0; lvl_q <= 1'b0; fine_q <= 8'd0;
+    end else begin
+      snap   <= tap[STAGES:1];   // stage 1: sample every tap
+      lvl    <= tap[0];
+      lvl_q  <= lvl;             // stage 2
+      fine_q <= cnt;             // stage 2: count of the stage-1 sample
+    end
+  end
+  assign fine_now  = fine_q;
   assign level_now = lvl_q;
 endmodule
