@@ -1,6 +1,6 @@
 # Tapeout sign-off record
 
-Recorded on 2026-09-14 for the sign-off commit (design with host FIFO and CRC-32) of this repository, CMOS5L flow
+Recorded on 2026-09-17 for the sign-off commit (design with host FIFO, CRC-32 and sub-clock timing delay lines) of this repository, CMOS5L flow
 (LibreLane 3.0.0rc1, IHP-Open-PDK `dev` + ihp-sg13cmos5l `ae76139`), tile
 allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 
@@ -9,34 +9,38 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | Check | Tool | Result |
 |-------|------|--------|
 | Lint | Verilator 5.046 `-Wall`, both RTL and `-DSYNTH` configurations | clean |
-| RTL simulation | cocotb 2.0.1 + Icarus 13, 12 tests, model lock-step every clock | 12/12 pass (`cd test && make`) |
-| FPGA netlist simulation | same suite on the `synth_ice40` netlist (block-RAM memories) | 12/12 pass (`make FPGA=yes`) |
+| RTL simulation | cocotb 2.0.1 + Icarus 13, 17 tests, model lock-step every clock incl. delay-line fine times | 17/17 pass (`cd test && make`) |
+| FPGA netlist simulation | same suite on the `synth_ice40` netlist (block-RAM memories, zero-delay chains) | 17/17 pass (`make FPGA=yes`) |
 | Formal | SymbiYosys 0.69 + z3, 9 safety properties | k-induction proof (depth 6) and BMC depth 24 pass |
 | Constrained random | 4 seeds x 1500 cycles per default run, two engines, random pads/masks/FIFO traffic | pass; status word, FIFO level and trace buffer match the model |
-| Synthesis | Yosys (LibreLane) | 30 397 cells, 604 765 um2 before P&R buffering; 6 711 flops; 0 check errors |
-| Place and route | OpenROAD (LibreLane) | routed, 0 routing DRC errors, 0 antenna violations after 36 diodes |
+| Synthesis | Yosys (LibreLane) | 33 989 cells, 653 125 um2 before P&R buffering; 7 075 flops; 512 delay cells kept; 0 check errors |
+| Place and route | OpenROAD (LibreLane) | routed (detailed routing 15 596 -> 4 -> 2 -> 0 violations), 0 antenna violations after 43 diodes; all 512 delay cells intact |
 | Timing | OpenSTA, nom_typ / min / max corners | setup and hold met at every corner, TNS 0 (see below) |
 | DRC | Magic (flow step 62) | 0 errors, 0 illegal overlaps |
-| Precheck | tt-support-tools `precheck.py` with KLayout 0.30.12 (CMOS5L DRC, pin-label overlap, zero area, pin, boundary, layer, cell-name, analog-pin checks) | all 9 checks pass on the final GDS with the generated 8x4 template; the DRC runs in the deck's tiled mode (`flow/patch_precheck_tiling.py`, 37 s; the default deep mode took 7.5 h locally and exceeded the 6 h CI job limit) |
+| Precheck | tt-support-tools `precheck.py` with KLayout 0.30.12, tiled DRC (`flow/patch_precheck_tiling.py`) | all 9 checks pass on the final GDS with the generated 8x4 template (DRC in tiled mode, under a minute) |
 | LVS | netgen (flow step 66) | 0 device/net/pin mismatches |
-| Gate-level simulation | cocotb on the final netlist with CMOS5L cell models | 12/12 pass on `final/nl` netlist (`make GATES=yes`) |
-| FPGA bitstream | Yosys + nextpnr-ice40 (TT ASIC-sim UP5K board) | builds: 2 338 / 5 280 logic cells (44 %), 5 block RAMs, Fmax 15.0 MHz (board clock 12 MHz) |
+| Gate-level simulation | cocotb on the final netlist with CMOS5L cell models (zero-delay chains) | 17/17 pass on `final/nl` netlist (`make GATES=yes`, 695 s) |
+| FPGA bitstream | Yosys + nextpnr-ice40 (TT ASIC-sim UP5K board) | builds: ~2 400 / 5 280 logic cells (46 %), 5 block RAMs, Fmax 15.6 MHz (board clock 12 MHz); delay lines stubbed |
 
 ## Area and utilisation
 
 | Metric | Value |
 |--------|-------|
 | Die (8x4) | 1724.16 x 710.64 um = 1.225 mm2 |
-| Standard-cell instances (no fill) | 42 181 (23 041 combinational, 6 711 sequential, 10 776 timing-repair buffers, clock tree, 36 antenna diodes) |
-| Standard-cell area | 762 990 um2 |
-| Utilisation | 63.2 % |
-| Routed wirelength | 1.76 m |
-| Estimated total power (typ) | 19.0 mW |
+| Standard-cell instances (no fill) | 46 174 (25 982 combinational, 7 075 sequential, 11 133 timing-repair buffers, 512 delay cells, clock tree, 43 antenna diodes) |
+| Standard-cell area | 815 451 um2 |
+| Utilisation | 67.5 % |
+| Routed wirelength | 1.85 m |
+| Estimated total power (typ) | 20.2 mW |
 
-The 10 776 timing-repair buffers are hold fixes (6 802 hold buffers) against
-the 0.3 ns clock skew of a 6 700-sink clock tree; the sequential and
-combinational logic alone is about 600 kum2 (50 %).  The 128-byte FIFO and
-CRC-32 added roughly 1 100 flops and 10 % utilisation.
+The 11 133 timing-repair buffers are hold fixes (6 901 hold buffers) against
+the 0.3 ns clock skew of a 7 000-sink clock tree; the sequential and
+combinational logic alone is about 650 kum2 (54 %).  The 128-byte FIFO and
+CRC-32 cost about 10 % utilisation; the four 128-stage delay lines with
+their sample flops, counters and tap multiplexers about 4 %.  A first
+version with 176-stage lines and two flop stages per tap reached 69-70 %
+and the detailed router did not converge within hours; at 67.5 % it
+converges in three iterations.
 
 ## Timing
 
@@ -44,14 +48,17 @@ Clock period 25 ns (40 MHz), generic Tiny Tapeout SDC (0.25 ns uncertainty, 5 % 
 
 | Corner | Setup worst slack | Hold worst slack | TNS |
 |--------|------------------|------------------|-----|
-| nom_slow_1p08V_125C | +7.71 ns | +0.650 ns | 0 |
-| nom_typ_1p20V_25C | +13.96 ns | +0.314 ns | 0 |
-| nom_fast_1p32V_m40C | +17.84 ns | +0.120 ns | 0 |
+| nom_slow_1p08V_125C | +6.45 ns | +0.630 ns | 0 |
+| nom_typ_1p20V_25C | +6.81 ns | +0.299 ns | 0 |
+| nom_fast_1p32V_m40C | +7.03 ns | +0.118 ns | 0 |
 
-The critical path is flop to flop through the 128:1 instruction read
-multiplexer and the engine decode; at the slow corner it leaves 7.7 ns of
-margin, so the 40 MHz Ethernet timing is retained.  The reports flag 12
-max-slew pins at the slow corner and 458 max-fanout pins, almost all clock-tree leaf buffers driving 17 sinks against
+The worst path is now the `rst_n` input (5 ns generic input delay plus the
+reset distribution) with 6.5 ns of margin; the engine paths through the
+128:1 instruction multiplexer keep more.  The delay lines are false paths
+(`src/proto.sdc`) and are neither timed nor repaired; their stage delay
+is 0.15 / 0.22 / 0.35 ns at the fast / typical / slow corner
+(experiments/tdc).  The reports flag 32 max-slew pins at the slow corner
+and 482 max-fanout pins, almost all clock-tree leaf buffers driving 17 sinks against
 the generic SDC's limit of 8; the flow treats both as informational and the
 design closes with `design__violations = 0`.  LVS (netgen): 0 mismatches,
 0 unmatched devices, nets or pins.
@@ -68,6 +75,11 @@ design closes with `design__violations = 0`.  LVS (netgen): 0 mismatches,
 * No SRAM macro exists for the CMOS5L slim PDK, so the program memories are
   flop arrays (128 x 16 per engine).  A 256-word memory would need either a
   latch-based array or a macro; both are left as future work.
+* Sub-clock timing: the 128-stage lines span a full period at the typical
+  and slow corners and about 80 % of one at the fast corner; the
+  calibration reference is half a period (12.5 ns) so it never saturates.
+  The RTL simulation models 224 ps per stage; real per-stage delay is read
+  from the calibration source on silicon.
 * The Manchester transmitter streams a complete frame (preamble, SFD, up to
   128 payload bytes from the host FIFO, hardware CRC-32 FCS) at 10 Mbit/s;
   the receiver decodes a stream into the trace buffer and the host checks
