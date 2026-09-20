@@ -270,3 +270,35 @@ async def test_usb_ls_data_packet(dut):
             c = (c >> 1) ^ (0xA001 if c & 1 else 0)
     c ^= 0xFFFF
     assert list(p["payload"][len(payload):]) == [c & 0xFF, c >> 8], (p["payload"].hex(), hex(c))
+
+
+@cocotb.test()
+async def test_usb_ls_token_capture(dut):
+    """A host's low-speed SETUP token is captured as timestamped edges and decoded."""
+    from protocols import usb_decode_from_edges, usb_ls_token_waveform
+    from proto_ref import cmd_capture
+    h = await setup(dut)
+    bit_clocks = 27
+    wave = usb_ls_token_waveform(pid=0x2D, addr=0x15, endp=0x0, bit_clocks=bit_clocks)
+    pos = {"i": 0}
+
+    def host(hh):
+        dp, dm = wave[pos["i"]] if pos["i"] < len(wave) else (0, 1)
+        pos["i"] += 1
+        hh.uio_in = (hh.uio_in & ~0x03) | (dm << 1) | dp
+    h.uio_in = 0x02
+    # Watch D+ and D-, trigger on the first change, capture every change.
+    await h.xfer(cmd_capture(watch=0x0003, trig_src=5, pin_capture=True))
+    await h.xfer(cmd_run(arm=True, ts_reset=True))
+    h.after_tick = host
+    await h.tick(len(wave) + 50)
+    h.after_tick = None
+    status = await h.read(READ_STATUS)
+    n = (status >> 16) & 0x3F
+    entries = await read_trace(h, n)
+    assert entries == h.model.trace[:n]
+    edges = [(e >> 16, e & 3) for e in entries if (e >> 14) & 3 == 1]
+    pkt = usb_decode_from_edges(edges, bit_clocks)
+    assert pkt["sync_ok"] and pkt["pid"] == 0x2D and pkt["addr"] == 0x15 and pkt["endp"] == 0, pkt
+    assert pkt["crc5_ok"], pkt
+    dut._log.info(f"captured {n} edges -> {pkt}")

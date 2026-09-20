@@ -443,3 +443,69 @@ class UsbLsDecoder:
                "payload": bytes(data[2:]), "stuff_error": -1 in raw, "bits": len(raw)}
         self.packets.append(pkt)
         self.state = "idle"
+
+
+def usb_crc5(bits: list[int]) -> list[int]:
+    """USB CRC-5 (poly 0x05, init 0x1F, inverted) over LSB-first bits; returned LSB first."""
+    crc = 0x1F
+    for b in bits:
+        crc = ((crc >> 1) ^ (0x14 if (crc ^ b) & 1 else 0)) & 0x1F
+    crc ^= 0x1F
+    return [(crc >> i) & 1 for i in range(5)]
+
+
+def usb_ls_token_waveform(pid: int, addr: int, endp: int, bit_clocks: int) -> list[tuple[int, int]]:
+    """Per-clock (D+, D-) samples of a low-speed token packet, idle J before and after."""
+    fields = [(0x80 >> 0) & 0xFF]  # SYNC byte
+    bits = [(0x80 >> i) & 1 for i in range(8)] + [(pid >> i) & 1 for i in range(8)]
+    payload = [(addr >> i) & 1 for i in range(7)] + [(endp >> i) & 1 for i in range(4)]
+    bits += payload + usb_crc5(payload)
+    stuffed, ones = [], 0
+    for b in bits:
+        stuffed.append(b)
+        ones = ones + 1 if b else 0
+        if ones == 6:
+            stuffed.append(0)
+            ones = 0
+    J, K, SE0 = (0, 1), (1, 0), (0, 0)
+    level = J
+    wave = [J] * (2 * bit_clocks)
+    for b in stuffed:
+        if b == 0:
+            level = K if level == J else J
+        wave += [level] * bit_clocks
+    wave += [SE0] * (2 * bit_clocks) + [J] * (3 * bit_clocks)
+    return wave
+
+
+def usb_decode_from_edges(edges: list[tuple[int, int]], bit_clocks: int) -> dict:
+    """Decode a low-speed packet from timestamped (time, level_code) edges.
+
+    `level_code` is (D+ | D- << 1).  NRZI: an interval of n bit times between
+    edges is n-1 ones followed by a 0.  Stuff bits are removed, bytes are
+    assembled LSB first, and a token's CRC-5 is checked."""
+    bits, ones = [], 0
+    prev_t = None
+    for t, lvl in edges:
+        if prev_t is None:
+            bits.append(0)                                       # the first transition is a 0
+        elif lvl == 0:                                           # SE0: end of packet
+            bits += [1] * (round((t - prev_t) / bit_clocks) - 1)
+            break
+        else:
+            n = round((t - prev_t) / bit_clocks)                 # n-1 ones, then this transition's 0
+            for b in [1] * (n - 1) + [0]:
+                if ones == 6:
+                    ones = 0
+                    continue                                     # drop the stuff bit
+                bits.append(b)
+                ones = ones + 1 if b else 0
+        prev_t = t
+    data = [sum(bits[8 * k + i] << i for i in range(8)) for k in range(len(bits) // 8)]
+    out = {"bits": len(bits), "sync_ok": data[:1] == [0x80], "pid": data[1] if len(data) > 1 else None}
+    if len(bits) >= 32:
+        body = bits[16:27]
+        out["addr"] = sum(body[i] << i for i in range(7))
+        out["endp"] = sum(body[7 + i] << i for i in range(4))
+        out["crc5_ok"] = bits[27:32] == usb_crc5(body)
+    return out

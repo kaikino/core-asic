@@ -62,7 +62,8 @@ suite compares the RTL against it pin-for-pin on every clock.
 4. `examples/` also holds a UART receiver, an SPI master, an I2C master, a
    JTAG master (IDCODE read), an SWD host (DPIDR read), a PS/2 device,
    a CAN 2.0A transmitter (bit stuffing, CRC-15, ACK), a low-speed USB
-   packet transmitter (NRZI, bit stuffing, CRC-16),
+   packet transmitter (NRZI, bit stuffing, CRC-16) with token capture
+   through the timestamped trace buffer,
    a 10 Mbit/s Manchester transmitter that sends a complete Ethernet frame
    (preamble, SFD, FIFO payload, hardware FCS) with a matching receiver, a
    10BASE-T link-pulse generator, sub-clock edge timing and glitch
