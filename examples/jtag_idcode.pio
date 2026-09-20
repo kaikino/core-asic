@@ -1,0 +1,63 @@
+; JTAG master: reset the TAP, then read the 32-bit IDCODE through the DR path.
+; GPIO0 TCK, GPIO1 TMS, GPIO2 TDI (all driven), GPIO3 TDO (input).
+; TMS/TDI change while TCK is low and are sampled on the rising edge; TDO is
+; sampled just before each rising edge.  Each byte of the IDCODE is traced
+; and the last one is also posted to the mailbox.  TCK period = 2*(T+3).
+.equ T 2
+        movi  r1, 0x07
+        out   r1, UIO_OE, 0x07
+        movi  r1, 0x00
+        out   r1, UIO, 0x07
+        setp  UIO, 1, 1              ; TMS=1: five clocks reach Test-Logic-Reset
+        movi  r2, 5
+trst:   delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, trst
+        setp  UIO, 1, 0              ; TMS=0 -> Run-Test/Idle
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        setp  UIO, 1, 1              ; TMS=1 -> Select-DR-Scan
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        setp  UIO, 1, 0              ; TMS=0 -> Capture-DR
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        delay T                      ; TMS=0 -> Shift-DR
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        movi  r1, 4                  ; four bytes, LSB first
+byte:   movi  r2, 8
+bit:    delay T
+        shin_lsb r0, GPIO3           ; TDO valid since the last falling edge
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, bit
+        trace r0
+        djnz  r1, byte
+        mbox  r0
+        setp  UIO, 1, 1              ; TMS=1 -> Exit1-DR (one extra shift, harmless)
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        delay T                      ; TMS=1 -> Update-DR
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        setp  UIO, 1, 0              ; TMS=0 -> Run-Test/Idle
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        done
+        halt

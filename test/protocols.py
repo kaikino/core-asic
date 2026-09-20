@@ -161,3 +161,126 @@ def frame_ok(frame: list[int]) -> bool:
         return False
     fcs = zlib.crc32(bytes(frame[:-4])) & 0xFFFFFFFF
     return frame[-4:] == [(fcs >> (8 * k)) & 0xFF for k in range(4)]
+
+
+class JtagTap:
+    """A minimal TAP: after Test-Logic-Reset the DR path holds IDCODE."""
+
+    STATES = {
+        "RESET": ("IDLE", "RESET"), "IDLE": ("IDLE", "SELDR"),
+        "SELDR": ("CAPDR", "SELIR"), "CAPDR": ("SHDR", "EX1DR"), "SHDR": ("SHDR", "EX1DR"),
+        "EX1DR": ("PAUDR", "UPDR"), "PAUDR": ("PAUDR", "EX2DR"), "EX2DR": ("SHDR", "UPDR"),
+        "UPDR": ("IDLE", "SELDR"),
+        "SELIR": ("CAPIR", "RESET"), "CAPIR": ("SHIR", "EX1IR"), "SHIR": ("SHIR", "EX1IR"),
+        "EX1IR": ("PAUIR", "UPIR"), "PAUIR": ("PAUIR", "EX2IR"), "EX2IR": ("SHIR", "UPIR"),
+        "UPIR": ("IDLE", "SELDR"),
+    }
+
+    def __init__(self, idcode: int):
+        self.idcode = idcode
+        self.state = "RESET"
+        self.dr = 0
+        self.tck = 0
+        self.tdo = 0
+        self.visited: list[str] = []
+
+    def step(self, tck: int, tms: int, tdi: int) -> int:
+        if tck and not self.tck:                      # rising edge: state + shift
+            if self.state == "SHDR":
+                self.dr = (self.dr >> 1) | (tdi << 31)
+            self.state = self.STATES[self.state][tms]
+            self.visited.append(self.state)
+            if self.state == "CAPDR":
+                self.dr = self.idcode
+        if not tck and self.tck:                      # falling edge: TDO
+            self.tdo = self.dr & 1
+        self.tck = tck
+        return self.tdo
+
+
+class SwdTarget:
+    """SWD target that answers a DPIDR read (request 0xA5) with ACK OK and an ID.
+
+    States: wait_reset (count SWDIO=1 clocks; 50 is a line reset), reset (SWDIO
+    still high), idle_low (host sent idle zeros), req (collecting 8 bits from
+    the start bit), turn (turnaround clock), reply (driving ACK, data, parity).
+    A malformed request (the switch sequence looks like one) returns to
+    wait_reset, which is what the host's second line reset resolves."""
+
+    def __init__(self, dpidr: int):
+        self.dpidr = dpidr
+        self.clk = 0
+        self.state = "wait_reset"
+        self.ones = 0
+        self.req = 0
+        self.req_bits = 0
+        self.reply: list[int] = []
+        self.driving = False
+        self.out = 1
+        self.requests: list[int] = []
+
+    def step(self, clk: int, swdio: int) -> tuple[bool, int]:
+        """Return (driving, value) for the target's side of SWDIO."""
+        if clk and not self.clk:                      # rising edge: sample the host
+            st = self.state
+            if st == "wait_reset":
+                self.ones = self.ones + 1 if swdio else 0
+                if self.ones >= 50:
+                    self.state = "reset"
+            elif st == "reset":
+                if not swdio:
+                    self.state = "idle_low"
+            elif st == "idle_low":
+                if swdio:
+                    self.req, self.req_bits, self.state = 1, 1, "req"
+            elif st == "req":
+                self.req |= swdio << self.req_bits
+                self.req_bits += 1
+                if self.req_bits == 8:
+                    r = self.req
+                    parity_ok = (bin(r & 0x1E).count("1") & 1) == ((r >> 5) & 1)
+                    if (r >> 7) & 1 and not (r >> 6) & 1 and parity_ok:
+                        self.requests.append(r)
+                        if r == 0xA5:
+                            par = bin(self.dpidr).count("1") & 1
+                            self.reply = [1, 0, 0] + [(self.dpidr >> i) & 1 for i in range(32)] + [par]
+                            self.state = "turn"
+                        else:
+                            self.state = "idle_low"
+                    else:
+                        self.ones, self.state = 0, "wait_reset"
+            elif st == "turn":
+                self.state = "reply"
+            elif st == "reply" and not self.reply:
+                self.driving, self.ones, self.state = False, 0, "wait_reset"
+        if not clk and self.clk:                      # falling edge: drive the next bit
+            if self.state == "reply" and self.reply:
+                self.driving, self.out = True, self.reply.pop(0)
+            elif self.state == "reply":
+                self.driving = False
+        self.clk = clk
+        return self.driving, self.out
+
+
+class Ps2Host:
+    """Samples DATA on CLK falling edges and decodes 11-bit device frames."""
+
+    def __init__(self):
+        self.clk = 1
+        self.bits: list[int] = []
+        self.bytes: list[int] = []
+        self.errors: list[str] = []
+
+    def step(self, clk: int, data: int) -> None:
+        if not clk and self.clk:
+            self.bits.append(data)
+            if len(self.bits) == 11:
+                start, payload, parity, stop = self.bits[0], self.bits[1:9], self.bits[9], self.bits[10]
+                value = sum(b << i for i, b in enumerate(payload))
+                if start != 0 or stop != 1:
+                    self.errors.append("framing")
+                if (sum(payload) + parity) % 2 != 1:
+                    self.errors.append("parity")
+                self.bytes.append(value)
+                self.bits = []
+        self.clk = clk

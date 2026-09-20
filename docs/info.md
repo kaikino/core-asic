@@ -60,9 +60,11 @@ suite compares the RTL against it pin-for-pin on every clock.
    and transmits every byte written with a `MBOX` frame at the baud rate set
    by the `.equ BIT` constant.
 4. `examples/` also holds a UART receiver, an SPI master, an I2C master, a
-   10 Mbit/s Manchester transmitter that sends a complete Ethernet frame
+   JTAG master (IDCODE read), an SWD host (DPIDR read), a PS/2 device,
+   a 10 Mbit/s Manchester transmitter that sends a complete Ethernet frame
    (preamble, SFD, FIFO payload, hardware FCS) with a matching receiver, a
-   10BASE-T link-pulse generator and a GPIO bring-up blinker.
+   10BASE-T link-pulse generator, sub-clock edge timing and glitch
+   programs, and a GPIO bring-up blinker.
 
 ## External hardware
 

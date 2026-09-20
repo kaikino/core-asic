@@ -1,0 +1,100 @@
+; SWD host: line reset, JTAG-to-SWD switch, then read DPIDR (the IDCODE).
+; GPIO0 SWCLK (driven), GPIO1 SWDIO (bidirectional: driven for the request,
+; released for the target's ACK and data).  Host drives SWDIO on the falling
+; edge and samples it before the rising edge.  Traces: ACK, four data bytes,
+; then the parity bit; the last data byte is also posted to the mailbox.
+.equ T 2
+        movi  r1, 0x03
+        out   r1, UIO_OE, 0x03
+        movi  r1, 0x02               ; SWDIO high, SWCLK low
+        out   r1, UIO, 0x03
+        movi  r2, 56                 ; line reset: >50 clocks with SWDIO high
+lrst:   delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, lrst
+        movi  r0, 0x9E               ; JTAG-to-SWD select sequence 0xE79E, LSB first
+        movi  r2, 8
+sw1:    shout_lsb r0, UIO, 1
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, sw1
+        movi  r0, 0xE7
+        movi  r2, 8
+sw2:    shout_lsb r0, UIO, 1
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, sw2
+        setp  UIO, 1, 1              ; second line reset
+        movi  r2, 56
+lrst2:  delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, lrst2
+        setp  UIO, 1, 0              ; idle clocks with SWDIO low
+        movi  r2, 4
+idle:   delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, idle
+        movi  r0, 0xA5               ; request: start=1 AP=0 RnW=1 A=00 par=1 stop=0 park=1
+        movi  r2, 8
+req:    shout_lsb r0, UIO, 1
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, req
+        setp  UIO_OE, 1, 0           ; release SWDIO: turnaround
+        delay T
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        movi  r0, 0
+        movi  r2, 3                  ; ACK, LSB first (001 = OK)
+ack:    delay T
+        shin_lsb r0, GPIO1
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, ack
+        shr   r0
+        shr   r0
+        shr   r0
+        shr   r0
+        shr   r0                     ; right-align the three ACK bits
+        trace r0
+        movi  r1, 4                  ; 32 data bits, LSB first, one byte at a time
+dbyte:  movi  r2, 8
+dbit:   delay T
+        shin_lsb r0, GPIO1
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        djnz  r2, dbit
+        trace r0
+        djnz  r1, dbyte
+        mbox  r0
+        delay T
+        in    r3, UIO_IN             ; parity bit
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        movi  r1, 0x02
+        and   r3, r1
+        trace r3                     ; 0x02 if the parity bit was 1
+        delay T                      ; turnaround back to the host
+        setp  UIO, 0, 1
+        delay T
+        setp  UIO, 0, 0
+        setp  UIO, 1, 0
+        setp  UIO_OE, 1, 1
+        done
+        halt

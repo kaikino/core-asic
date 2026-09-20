@@ -26,7 +26,7 @@ blocks.
 ```
 src/        RTL (SystemVerilog): top level, PIO engine, host link, memories
 tools/      proto_asm.py (assembler/disassembler), proto_ref.py (cycle-accurate model)
-examples/   microprograms: uart_tx/rx, spi_master, i2c_master, manchester_tx/rx, link_pulse
+examples/   microprograms: uart, spi, i2c, jtag, swd, ps2, manchester (Ethernet), link_pulse, edge_timer, glitch_pulse
 test/       cocotb suite (lock-step RTL vs model), Verilog smoke tests, pytest unit tests
 formal/     SymbiYosys safety properties (k-induction proof and BMC)
 flow/       PDK install, local hardening, 8x4 tile-template generator

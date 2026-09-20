@@ -1,0 +1,61 @@
+; PS/2 device emulator: sends each mailbox byte as a device-to-host frame.
+; GPIO0 CLK, GPIO1 DATA, both open drain (data register 0, OE pulls low).
+; Frame: start 0, eight data bits LSB first, odd parity, stop 1.  The device
+; sets DATA while CLK is high, then pulses CLK low; the host samples DATA on
+; the falling edge.  Half clock = T + 2 clocks.
+.equ T 4
+        movi  r1, 0x00
+        out   r1, UIO, 0x03
+        out   r1, UIO_OE, 0x03       ; both lines released (pulled up)
+loop:   wait  HIGH, MBOX_IN
+        in    r0, MBOX
+        mov   r1, r0                 ; odd parity of r0 into r3 (unrolled, no spare counter)
+        movi  r3, 1
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        shr   r1
+        movc  r2
+        xor   r3, r2
+        setp  UIO_OE, 1, 1           ; start bit: DATA low
+        delay T
+        setp  UIO_OE, 0, 1           ; CLK low (host samples)
+        delay T
+        setp  UIO_OE, 0, 0           ; CLK high
+        movi  r2, 8
+bit:    shout_lsb r0, UIO_OE, 1, INV ; DATA = bit (OE = ~bit)
+        delay T
+        setp  UIO_OE, 0, 1
+        delay T
+        setp  UIO_OE, 0, 0
+        djnz  r2, bit
+        shout_lsb r3, UIO_OE, 1, INV ; parity bit
+        delay T
+        setp  UIO_OE, 0, 1
+        delay T
+        setp  UIO_OE, 0, 0
+        setp  UIO_OE, 1, 0           ; stop bit: DATA released
+        delay T
+        setp  UIO_OE, 0, 1
+        delay T
+        setp  UIO_OE, 0, 0
+        delay T*16                   ; inter-frame idle
+        jmp   loop

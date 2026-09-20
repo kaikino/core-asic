@@ -108,3 +108,83 @@ async def test_i2c_master(dut):
     entries = await read_trace(h, 2)
     assert [e & 1 for e in entries] == [0, 0], "both bytes ACKed"
     assert h.uio_out & 0x03 == 0, "open-drain lines never drive high"
+
+
+@cocotb.test()
+async def test_jtag_idcode(dut):
+    """JTAG master reads a TAP's IDCODE through the DR path."""
+    from protocols import JtagTap
+    h = await setup(dut)
+    tap = JtagTap(idcode=0x2BA01477)
+
+    def peer(hh):
+        o = hh.uio_out
+        tdo = tap.step(o & 1, (o >> 1) & 1, (o >> 2) & 1)
+        hh.uio_in = (hh.uio_in & ~0x08) | (tdo << 3)
+    h.after_tick = peer
+    await h.load(0, example("jtag_idcode.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    await h.tick(1500)
+    status = await h.wait_idle(0)
+    assert status & 0x04, "DONE"
+    entries = await read_trace(h, 4)
+    assert [e & 0xFF for e in entries] == [0x77, 0x14, 0xA0, 0x2B], [hex(e & 0xFF) for e in entries]
+    assert "CAPDR" in tap.visited and tap.visited[-1] == "IDLE", tap.visited[-6:]
+
+
+@cocotb.test()
+async def test_swd_dpidr(dut):
+    """SWD host performs the JTAG-to-SWD switch and reads DPIDR."""
+    from protocols import SwdTarget
+    h = await setup(dut)
+    target = SwdTarget(dpidr=0x2BA01477)
+
+    def bus(hh):
+        clk = hh.uio_out & 1
+        host_drives = bool(hh.uio_oe & 0x02)
+        host_val = (hh.uio_out >> 1) & 1
+        line = host_val if host_drives else 1
+        driving, val = target.step(clk, line)
+        if driving and not host_drives:
+            line = val
+        hh.uio_in = (hh.uio_in & ~0x02) | (line << 1)
+    h.after_tick = bus
+    h.uio_in = 0x02
+    await h.load(0, example("swd_dpidr.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    await h.tick(3000)
+    status = await h.wait_idle(0)
+    assert status & 0x04, "DONE"
+    assert target.requests == [0xA5], target.requests
+    entries = await read_trace(h, 6)
+    vals = [e & 0xFF for e in entries]
+    assert vals[0] == 0b001, f"ACK {vals[0]:03b}"
+    assert vals[1:5] == [0x77, 0x14, 0xA0, 0x2B], [hex(v) for v in vals[1:5]]
+    assert vals[5] == (0x02 if bin(0x2BA01477).count("1") & 1 else 0), "parity"
+
+
+@cocotb.test()
+async def test_ps2_device(dut):
+    """PS/2 device frames with odd parity decoded by a host monitor."""
+    from protocols import Ps2Host
+    h = await setup(dut)
+    host = Ps2Host()
+
+    def bus(hh):
+        oe = hh.uio_oe
+        clk, data = 0 if oe & 1 else 1, 0 if oe & 2 else 1
+        host.step(clk, data)
+        hh.uio_in = (hh.uio_in & ~0x03) | (data << 1) | clk
+    h.after_tick = bus
+    h.uio_in = 0x03
+    await h.load(0, example("ps2_device.pio"))
+    await h.start(0)
+    codes = [0x1C, 0xF0, 0x1C, 0x5A]   # 'A' make, break, and Enter
+    for c in codes:
+        await h.xfer(cmd_mbox(0, c))
+        await h.tick(400)
+    assert host.bytes == codes, host.bytes
+    assert not host.errors, host.errors
+    assert h.uio_out & 0x03 == 0, "open-drain lines never drive high"
