@@ -30,7 +30,7 @@ examples/   microprograms: uart, spi, i2c, jtag, swd, ps2, can, usb_ls, manchest
 test/       cocotb suite (lock-step RTL vs model), Verilog smoke tests, pytest unit tests
 formal/     SymbiYosys safety properties (k-induction proof and BMC)
 flow/       PDK install, local hardening, 8x4 tile-template generator
-docs/       system-design.md (guided tour), info.md (datasheet), isa.md (ISA + host protocol), signoff.md (results)
+docs/       submission.md (the case), system-design.md (guided tour), info.md (datasheet), isa.md (ISA + host protocol), signoff.md (results)
 ```
 
 ## Quick start
@@ -63,6 +63,7 @@ Hardening locally (Docker, LibreLane 3.0.0rc1) is described in
 * The CMOS5L slim PDK ships no SRAM macro, so program memories are flop
   arrays behind an SRAM-shaped wrapper (`src/proto_program_ram.sv`).
 
-New to the project? Start with `docs/system-design.md`, a piece-by-piece
-walkthrough for readers who know basic SystemVerilog but have never designed
-a chip. `docs/isa.md` has the instruction set and host protocol reference.
+New to the project? Start with `docs/submission.md` (the case for the design)
+and `docs/system-design.md`, a piece-by-piece walkthrough for readers who
+know basic SystemVerilog but have never designed a chip. `docs/isa.md` has
+the instruction set and host protocol reference.

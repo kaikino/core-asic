@@ -53,9 +53,11 @@ section 19.
 
 The chip contains two of these little computers ("engines"), a way for a
 host microcontroller to load programs and talk to them, a hardware rule that
-stops the two engines from fighting over a pin, a small logic analyser, and
-a byte FIFO with a CRC-32 unit so that even a 10 Mbit/s Ethernet frame can be
-produced from a program.
+stops the two engines from fighting over a pin, a small logic analyser, a
+byte FIFO with a programmable CRC unit so that even a 10 Mbit/s Ethernet
+frame can be produced from a program, and two delay lines that let programs
+see and place edges between clock ticks. The example programs cover UART,
+SPI, I2C, JTAG, SWD, PS/2, CAN, low-speed USB and Ethernet.
 
 ## 2. The Tiny Tapeout box we live in
 
@@ -627,30 +629,33 @@ different bytes, which a registered pulse could not guarantee. `POP` also
 sets the carry to "was there a byte", so a program can detect an empty
 FIFO with `movc` and `jz`.
 
-### 11.2 CRC-32
+### 11.2 The CRC unit
 
 A CRC is a checksum that receivers use to detect corrupted frames; Ethernet
 appends a 32-bit one (the FCS) to every frame. Computing it in software on
 this engine at 10 Mbit/s would not fit the four clocks per bit budget, so
-there is a hardware unit. The whole algorithm is one function:
+there is a hardware unit. One bit of the algorithm is a tiny function and a
+byte is eight of them:
 
 ```systemverilog
-function automatic [31:0] crc32_byte(input [31:0] c, input [7:0] d);
-  integer b; reg [31:0] x;
+function automatic [31:0] crc_step(input [31:0] c, input bit_in, input [31:0] poly);
+  reg [31:0] x;
   begin
-    x = c ^ {24'd0, d};
-    for (b = 0; b < 8; b = b + 1)
-      x = (x >> 1) ^ (x[0] ? 32'hEDB88320 : 32'd0);
-    crc32_byte = x;
+    x = c ^ {31'd0, bit_in};
+    crc_step = (x >> 1) ^ (x[0] ? poly : 32'd0);
   end
 endfunction
 ```
 
-The `for` loop is unrolled by synthesis into eight layers of XOR gates, so
-folding a byte into the running CRC takes one clock. `0xEDB88320` is the
-"reflected" Ethernet polynomial; the same constant, initial value
-`0xFFFFFFFF` and final inversion make this identical to `zlib.crc32`, which
-the tests rely on.
+The byte version's `for` loop is unrolled by synthesis into eight layers of
+XOR gates, so folding a byte into the running CRC takes one clock. The
+polynomial, initial value and final XOR are registers the host programs
+(CRC frames); the defaults, reflected polynomial `0xEDB88320`, initial value
+`0xFFFFFFFF` and final inversion, make it identical to `zlib.crc32`, which
+the tests rely on. Shorter CRCs simply use the low bits: CRC-16/USB, CRC-5
+for USB tokens, and CAN's CRC-15 (a non-reflected CRC, run with the
+reflected polynomial and read out bit-reversed). `crcbit` folds a single
+bit, the carry, which is what bit-oriented framings such as CAN need.
 
 The register is driven from two places:
 
