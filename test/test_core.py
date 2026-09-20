@@ -14,7 +14,7 @@ from common import example, read_trace, setup  # noqa: F401
 from proto_asm import assemble_program  # noqa: F401
 from proto_ref import (  # noqa: F401
     READ_ID, READ_MBOX, READ_STATUS, READ_TIME, READ_TRACE, TRACE_DEPTH,
-    cmd_capture, cmd_fifo, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
+    cmd_capture, cmd_crc_config, cmd_fifo, cmd_gpio, cmd_mbox, cmd_perm, cmd_run, cmd_traceptr)
 from protocols import (  # noqa: F401
     I2cSlave, SpiSlave, UartMonitor, UartSource, find_payload, manchester_decode)
 
@@ -156,3 +156,44 @@ async def test_fifo_and_crc(dut):
     status = await h.wait_idle(0)
     entries = await read_trace(h, 4)
     assert [e & 0xFF for e in entries] == [0x26, 0x39, 0xF4, 0xCB]
+
+
+@cocotb.test()
+async def test_programmable_crc(dut):
+    """CRC-16/USB through the FIFO's FCS mode and CRC-15/CAN through CRCBIT."""
+    h = await setup(dut)
+    data = [0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39]
+    # CRC-16/USB: reflected polynomial 0xA001, init and final XOR 0xFFFF, check 0xB4C8.
+    for f in cmd_crc_config(0xA001, 0xFFFF, 0xFFFF):
+        await h.xfer(f)
+    prog = assemble_program("l: pop r0\nmovc r1\njz r1, end\ntrace r0\njmp l\nend: done\nhalt").words
+    await h.load(0, prog)
+    await h.xfer(cmd_fifo(reset=True, fcs_mode=True))
+    for b in data:
+        await h.xfer(cmd_fifo(b, push=True, fcs_mode=True))
+    await h.xfer(cmd_run(arm=True, start0=True))
+    status = await h.wait_idle(0)
+    entries = await read_trace(h, (status >> 16) & 0x3F)
+    got = [e & 0xFF for e in entries]
+    assert got == data + [0xC8, 0xB4, 0x00, 0x00], [hex(x) for x in got]
+    # CRC-15/CAN: polynomial 0x4599 MSB-first == reflected 0x4CD1 with bits fed MSB
+    # first; check value 0x059E, which the reflected register holds bit-reversed.
+    for f in cmd_crc_config(0x4CD1, 0x0000, 0x0000):
+        await h.xfer(f)
+    prog = assemble_program(
+        "crci\nmovi r0, 0x31\nmovi r2, 9\n"
+        "byte: movi r3, 8\n"
+        "bit: shl r0\ncrcbit\ndjnz r3, bit\n"      # feed the byte MSB first
+        "djnz r2, next\njmp fin\n"
+        "next: wait HIGH, MBOX_IN\nin r0, MBOX\njmp byte\n"
+        "fin: crcb r3, 0\ntrace r3\ncrcb r3, 1\ntrace r3\ndone\nhalt").words
+    await h.load(1, prog)
+    await h.xfer(cmd_run(arm=True))
+    await h.start(1)
+    for b in data[1:]:
+        await h.xfer(cmd_mbox(1, b))
+        await h.tick(30)
+    status = await h.wait_idle(1)
+    entries = await read_trace(h, 2)
+    reflected = int(format(0x059E, "015b")[::-1], 2)
+    assert [e & 0xFF for e in entries] == [reflected & 0xFF, (reflected >> 8) & 0x7F], [hex(e & 0xFF) for e in entries]

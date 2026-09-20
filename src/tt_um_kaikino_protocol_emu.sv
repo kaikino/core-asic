@@ -44,6 +44,7 @@ module tt_um_kaikino_protocol_emu #(
   localparam [3:0] CMD_READSEL  = 4'h8;  // [2:0] readback register
   localparam [3:0] CMD_FIFO     = 4'h9;  // [7:0] data [8] push [9] reset [10] FCS mode
   localparam [3:0] CMD_TIMING   = 4'hA;  // [27] channel [26] 0: TDC {[3:0] source, [8] trace} 1: DTC {[2:0] pin, [8] enable, [23:16] tap}
+  localparam [3:0] CMD_CRC      = 4'hB;  // [27:26] 0 polynomial 1 initial value 2 final XOR; [25:24] byte lane; [7:0] byte
   localparam [7:0] VERSION      = 8'h10;
 
   // ------------------------------------------------------------------
@@ -123,11 +124,15 @@ module tt_um_kaikino_protocol_emu #(
   wire [17:0] tdc_word = {tdc_level[1], tdc_level[0], tdc_fine[1], tdc_fine[0]};
 
   // ------------------------------------------------------------------
-  // Host-to-engine data FIFO with CRC-32 (Ethernet FCS) support.  Either
-  // engine may pop; a simultaneous pop hands both the same byte.  In FCS
-  // mode every data byte popped is folded into the CRC and, once the FIFO
-  // is empty, the next four pops return the frame check sequence in wire
-  // order (~crc, least significant byte first).
+  // Host-to-engine data FIFO with a programmable CRC unit.  Either engine
+  // may pop; a simultaneous pop hands both the same byte.  In FCS mode every
+  // data byte popped is folded into the CRC and, once the FIFO is empty, the
+  // next four pops return the check value XORed with crc_xorout, least
+  // significant byte first (Ethernet FCS wire order with the defaults).
+  //
+  // The CRC is the reflected (LSB-first) form with a host-programmable
+  // polynomial, initial value and final XOR; a shorter CRC uses the low bits
+  // (poly, init and xorout zero above its width).  Defaults are CRC-32.
   // ------------------------------------------------------------------
   reg  [7:0]  fifo_mem [0:(1 << FIFO_AW) - 1];
   reg  [FIFO_AW-1:0] fifo_rptr, fifo_wptr;
@@ -135,6 +140,7 @@ module tt_um_kaikino_protocol_emu #(
   reg         fcs_mode, fcs_done;
   reg  [1:0]  fcs_idx;
   reg  [31:0] crc;
+  reg  [31:0] crc_poly, crc_init_val, crc_xorout;
   wire        fifo_empty = (fifo_count == {(FIFO_AW+1){1'b0}});
   wire        fifo_full  = fifo_count[FIFO_AW];
 `ifdef SYNTH
@@ -146,7 +152,7 @@ module tt_um_kaikino_protocol_emu #(
 `else
   wire [7:0]  fifo_head  = fifo_mem[fifo_rptr];
 `endif
-  wire [31:0] fcs        = ~crc;
+  wire [31:0] fcs        = crc ^ crc_xorout;
   wire [7:0]  fcs_byte   = fcs[fcs_idx*8 +: 8];
   wire        fcs_avail  = fcs_mode & ~fcs_done;
   wire        fifo_valid = ~fifo_empty | fcs_avail;
@@ -154,6 +160,8 @@ module tt_um_kaikino_protocol_emu #(
   wire        e_fifo_pop [0:1];
   wire        e_crc_init [0:1];
   wire        e_crc_update [0:1];
+  wire        e_crc_bit_update [0:1];
+  wire        e_crc_bit [0:1];
   wire [7:0]  e_crc_byte [0:1];
   wire        fifo_pop   = e_fifo_pop[0] | e_fifo_pop[1];
   wire        crc_init   = e_crc_init[0] | e_crc_init[1];
@@ -161,16 +169,24 @@ module tt_um_kaikino_protocol_emu #(
   wire [7:0]  crc_in     = e_crc_update[0] ? e_crc_byte[0] : e_crc_byte[1];
   wire        crc_fold   = crc_update | (fifo_pop & ~fifo_empty & fcs_mode);
   wire [7:0]  crc_fold_byte = crc_update ? crc_in : fifo_head;
+  wire        crc_bit_fold = e_crc_bit_update[0] | e_crc_bit_update[1];
+  wire        crc_bit_in   = e_crc_bit_update[0] ? e_crc_bit[0] : e_crc_bit[1];
 
-  // Reflected CRC-32 (polynomial 0xEDB88320), eight bit-steps per clock.
-  function automatic [31:0] crc32_byte(input [31:0] c, input [7:0] d);
+  // Reflected CRC step: one bit, or eight bit-steps for a byte, per clock.
+  function automatic [31:0] crc_step(input [31:0] c, input bit_in, input [31:0] poly);
+    reg [31:0] x;
+    begin
+      x = c ^ {31'd0, bit_in};
+      crc_step = (x >> 1) ^ (x[0] ? poly : 32'd0);
+    end
+  endfunction
+  function automatic [31:0] crc_byte_fold(input [31:0] c, input [7:0] d, input [31:0] poly);
     integer b;
     reg [31:0] x;
     begin
-      x = c ^ {24'd0, d};
-      for (b = 0; b < 8; b = b + 1)
-        x = (x >> 1) ^ (x[0] ? 32'hEDB88320 : 32'd0);
-      crc32_byte = x;
+      x = c;
+      for (b = 0; b < 8; b = b + 1) x = crc_step(x, d[b], poly);
+      crc_byte_fold = x;
     end
   endfunction
 
@@ -199,6 +215,7 @@ module tt_um_kaikino_protocol_emu #(
           .fifo_data(fifo_data), .fifo_valid(fifo_valid), .fcs(fcs),
           .fifo_pop(e_fifo_pop[g]), .crc_init(e_crc_init[g]),
           .crc_update(e_crc_update[g]), .crc_byte(e_crc_byte[g]),
+          .crc_bit_update(e_crc_bit_update[g]), .crc_bit(e_crc_bit[g]),
           .tdc_word(tdc_word), .dtc_we(e_dtc_we[g]), .dtc_ch(e_dtc_ch[g]), .dtc_data(e_dtc_data[g])
       );
     end
@@ -333,6 +350,7 @@ module tt_um_kaikino_protocol_emu #(
       trace_wptr <= {TRACE_AW{1'b0}}; trace_rptr <= {TRACE_AW{1'b0}}; trace_count <= {(TRACE_AW+1){1'b0}};
       fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
       fcs_mode <= 1'b0; fcs_done <= 1'b0; fcs_idx <= 2'd0; crc <= 32'hFFFFFFFF;
+      crc_poly <= 32'hEDB88320; crc_init_val <= 32'hFFFFFFFF; crc_xorout <= 32'hFFFFFFFF;
       for (k = 0; k < 2; k = k + 1) begin
         tdc_src[k] <= 4'd15; tdc_trace_en[k] <= 1'b0; tdc_fine[k] <= 8'd0;
         tdc_level[k] <= 1'b0; tdc_level_prev[k] <= 1'b0;
@@ -376,8 +394,9 @@ module tt_um_kaikino_protocol_emu #(
           if (fcs_idx == 2'd3) fcs_done <= 1'b1;
         end
       end
-      if (crc_fold) crc <= crc32_byte(crc, crc_fold_byte);
-      if (crc_init) begin crc <= 32'hFFFFFFFF; fcs_idx <= 2'd0; fcs_done <= 1'b0; end
+      if (crc_fold)          crc <= crc_byte_fold(crc, crc_fold_byte, crc_poly);
+      else if (crc_bit_fold) crc <= crc_step(crc, crc_bit_in, crc_poly);
+      if (crc_init) begin crc <= crc_init_val; fcs_idx <= 2'd0; fcs_done <= 1'b0; end
 
       // Mailboxes.
       for (k = 0; k < 2; k = k + 1) begin
@@ -443,11 +462,19 @@ module tt_um_kaikino_protocol_emu #(
               dtc_tap[cfg_word[27]] <= cfg_word[23:16];
             end
           end
+          CMD_CRC: begin
+            case (cfg_word[27:26])
+              2'd0: crc_poly[cfg_word[25:24]*8 +: 8]     <= cfg_word[7:0];
+              2'd1: crc_init_val[cfg_word[25:24]*8 +: 8] <= cfg_word[7:0];
+              2'd2: crc_xorout[cfg_word[25:24]*8 +: 8]   <= cfg_word[7:0];
+              default: ;
+            endcase
+          end
           CMD_FIFO: begin
             fcs_mode <= cfg_word[10];
             if (cfg_word[9]) begin
               fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
-              crc <= 32'hFFFFFFFF; fcs_idx <= 2'd0; fcs_done <= 1'b0;
+              crc <= crc_init_val; fcs_idx <= 2'd0; fcs_done <= 1'b0;
             end else if (cfg_word[8] && !fifo_full) begin
               fifo_wptr  <= fifo_wptr + 1'b1;
               // A pop in the same clock keeps the count unchanged.
@@ -466,8 +493,13 @@ module tt_um_kaikino_protocol_emu #(
   end
 
   // Calibration reference: toggles on the falling edge, so each rising-edge
-  // sample of the TDC sees an edge exactly half a clock period old.
+  // sample of the TDC sees an edge exactly half a clock period old.  (The
+  // formal build keeps a single clock polarity; no property depends on it.)
+`ifdef FORMAL
+  always @(posedge clk or negedge rst_n) begin
+`else
   always @(negedge clk or negedge rst_n) begin
+`endif
     if (!rst_n) cal_toggle <= 1'b0;
     else        cal_toggle <= ~cal_toggle;
   end
@@ -522,5 +554,5 @@ module tt_um_kaikino_protocol_emu #(
   end
 `endif
 
-  wire _unused = &{ena, CMD_NOP, cfg_word[25:24], cfg_word[18:11], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
+  wire _unused = &{ena, CMD_NOP, cfg_word[18:11], prog_waddr[7:PROG_AW], pc[0][7:PROG_AW], pc[1][7:PROG_AW], 1'b0};
 endmodule

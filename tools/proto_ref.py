@@ -33,12 +33,17 @@ def fine_count(age_ps: int) -> int:
     return min(TDLY_STAGES, age_ps // TDLY_PS)
 
 
-def crc32_byte(crc: int, byte: int) -> int:
-    """One byte of reflected CRC-32 (polynomial 0xEDB88320), as in zlib."""
-    x = crc ^ byte
-    for _ in range(8):
-        x = (x >> 1) ^ (0xEDB88320 if x & 1 else 0)
-    return x
+def crc_step(crc: int, bit: int, poly: int = 0xEDB88320) -> int:
+    """One bit of a reflected (LSB-first) CRC with the given reflected polynomial."""
+    x = crc ^ (bit & 1)
+    return (x >> 1) ^ (poly if x & 1 else 0)
+
+
+def crc32_byte(crc: int, byte: int, poly: int = 0xEDB88320) -> int:
+    """One byte of reflected CRC (CRC-32 / zlib with the default polynomial)."""
+    for i in range(8):
+        crc = crc_step(crc, (byte >> i) & 1, poly)
+    return crc
 VERSION = 0x10
 
 
@@ -71,6 +76,7 @@ class Engine:
         self.crc_init = False
         self.crc_update = False
         self.crc_byte = 0
+        self.carry_before = 0
         # top-level values visible to the instruction being executed
         self.fifo_data = 0
         self.fifo_valid = False
@@ -85,7 +91,7 @@ class Engine:
         self.trace_we = False
         self.mbox_in_take = False
         self.mbox_out_we = False
-        self.fifo_pop = self.crc_init = self.crc_update = self.dtc_we = False
+        self.fifo_pop = self.crc_init = self.crc_update = self.dtc_we = self.crc_bit_update = False
         if clear_done:
             self.done = False
         if stop:
@@ -109,6 +115,7 @@ class Engine:
 
     def _execute(self, w: int, pin_in: int, pin_prev: int, mbox_in: int) -> None:
         op, rd, sub, imm = w >> 12, (w >> 10) & 3, (w >> 8) & 3, w & 0xFF
+        self.carry_before = self.carry
         rd_val, rs_val = self.regs[rd], self.regs[sub]
         pin_now = (pin_in >> (imm & 15)) & 1
         pin_was = (pin_prev >> (imm & 15)) & 1
@@ -195,6 +202,8 @@ class Engine:
                 self.regs[rd] = self.fifo_data; self.carry = int(self.fifo_valid); self.fifo_pop = True
             elif fn == 12:
                 self.dtc_we = True; self.dtc_ch = (imm >> 4) & 1; self.dtc_data = rd_val
+            elif fn == 13:
+                self.crc_bit_update = True
             self.pc = nxt
         elif op == 0xD:
             if sub == 0: self.trace_we = True; self.trace_data = imm
@@ -263,6 +272,15 @@ def cmd_readsel(sel: int) -> int:
     return (0x8 << 28) | (sel & 7)
 
 
+def cmd_crc_config(poly: int, init: int, xorout: int) -> list:
+    """The twelve CRC frames that program a reflected polynomial, initial value and final XOR."""
+    frames = []
+    for which, value in enumerate((poly, init, xorout)):
+        for lane in range(4):
+            frames.append((0xB << 28) | (which << 26) | (lane << 24) | ((value >> (8 * lane)) & 0xFF))
+    return frames
+
+
 def cmd_tdc(channel: int, source: int, trace: bool = False) -> int:
     """TIMING frame: TDC channel source (0-12 pins, 13 calibration toggle)."""
     return (0xA << 28) | (channel << 27) | (int(trace) << 8) | (source & 0xF)
@@ -328,6 +346,7 @@ class Chip:
         self.fcs_done = False
         self.fcs_idx = 0
         self.crc = 0xFFFFFFFF
+        self.crc_poly, self.crc_init_val, self.crc_xorout = 0xEDB88320, 0xFFFFFFFF, 0xFFFFFFFF
         # registered command side effects (take effect one edge later)
         self._prog_we = [False, False]
         self._prog_waddr = 0
@@ -418,7 +437,7 @@ class Chip:
         # Engine pulses (trace, mailbox) are registered in the RTL, so the top
         # level reacts to the pulses produced by the *previous* edge.
         pulses = [(x.trace_we, x.trace_data, x.mbox_in_take, x.mbox_out_we, x.mbox_out) for x in e]
-        fcs = (~self.crc) & 0xFFFFFFFF
+        fcs = self.crc ^ self.crc_xorout
         fcs_avail = self.fcs_mode and not self.fcs_done
         if self.fifo:
             fifo_data, fifo_valid = self.fifo[0], True
@@ -441,12 +460,16 @@ class Chip:
         pop = e[0].fifo_pop or e[1].fifo_pop
         upd = e[0].crc_update or e[1].crc_update
         upd_byte = e[0].crc_byte if e[0].crc_update else e[1].crc_byte
+        bit_upd = e[0].crc_bit_update or e[1].crc_bit_update
+        bit_in = e[0].carry_before if e[0].crc_bit_update else e[1].carry_before
         init = e[0].crc_init or e[1].crc_init
         crc_next = self.crc
         if upd:
-            crc_next = crc32_byte(self.crc, upd_byte)
+            crc_next = crc32_byte(self.crc, upd_byte, self.crc_poly)
         elif pop and self.fifo and self.fcs_mode:
-            crc_next = crc32_byte(self.crc, self.fifo[0])
+            crc_next = crc32_byte(self.crc, self.fifo[0], self.crc_poly)
+        elif bit_upd:
+            crc_next = crc_step(self.crc, bit_in, self.crc_poly)
         if pop:
             if self.fifo:
                 self.fifo.pop(0)
@@ -456,7 +479,7 @@ class Chip:
                 self.fcs_idx = (self.fcs_idx + 1) & 3
         self.crc = crc_next
         if init:
-            self.crc, self.fcs_idx, self.fcs_done = 0xFFFFFFFF, 0, False
+            self.crc, self.fcs_idx, self.fcs_done = self.crc_init_val, 0, False
         # program memory writes registered last cycle
         for g in range(2):
             if self._prog_we[g]:
@@ -590,6 +613,13 @@ class Chip:
             self.stop_on_full = bool(c.bit(17))
         elif k == 0x8:
             self.read_sel = c.bits(2, 0)
+        elif k == 0xB:
+            lane, byte = c.bits(25, 24), c.bits(7, 0)
+            which = c.bits(27, 26)
+            name = ["crc_poly", "crc_init_val", "crc_xorout"][which] if which < 3 else None
+            if name:
+                v = getattr(self, name) & ~(0xFF << (8 * lane)) | (byte << (8 * lane))
+                setattr(self, name, v & 0xFFFFFFFF)
         elif k == 0xA:
             ch = c.bit(27)
             if not c.bit(26):
@@ -603,6 +633,6 @@ class Chip:
             self.fcs_mode = bool(c.bit(10))
             if c.bit(9):
                 self.fifo = []
-                self.crc, self.fcs_idx, self.fcs_done = 0xFFFFFFFF, 0, False
+                self.crc, self.fcs_idx, self.fcs_done = self.crc_init_val, 0, False
             elif c.bit(8) and len(self.fifo) < FIFO_DEPTH:
                 self.fifo.append(c.bits(7, 0))

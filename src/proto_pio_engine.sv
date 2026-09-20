@@ -33,6 +33,7 @@
 //                              FCS byte imm[5:4]) 11 POP rd (rd = next data
 //                              FIFO byte, C = byte was valid) 12 DTCW rd, ch
 //                              (delay-line tap for DTC channel imm[4] = rd)
+//                              13 CRCBIT (fold the carry bit into the CRC)
 //  D EVT   sub, imm8|rs        0 TRACE imm, 1 TRACE rs, 2 MBOX <= rs, 3 DONE
 //  E HALT                      stop and release every output enable
 //  F (illegal)                 HALT plus a sticky fault
@@ -71,6 +72,8 @@ module proto_pio_engine (
     output wire        fifo_pop,
     output wire        crc_init,
     output wire        crc_update,
+    output wire        crc_bit_update,
+    output wire        crc_bit,
     output wire [7:0]  crc_byte,
     // Sub-clock timing: latched TDC results in, DTC tap writes out.
     input  wire [17:0] tdc_word,   // {lvl1, lvl0, fine1[7:0], fine0[7:0]}
@@ -113,6 +116,8 @@ module proto_pio_engine (
   assign fifo_pop   = alu_op & (imm[3:0] == 4'd11);
   assign crc_init   = alu_op & (imm[3:0] == 4'd9);
   assign crc_update = alu_op & (imm[3:0] == 4'd8);
+  assign crc_bit_update = alu_op & (imm[3:0] == 4'd13);
+  assign crc_bit    = carry;
   assign crc_byte   = rd_val;
   assign dtc_we     = alu_op & (imm[3:0] == 4'd12);
   assign dtc_ch     = imm[4];
@@ -233,7 +238,7 @@ module proto_pio_engine (
                 4'd7: regs[rd] <= ~rd_val;
                 4'd10: regs[rd] <= fcs_sel;
                 4'd11: begin regs[rd] <= fifo_data; carry <= fifo_valid; end
-                default: ;  // 8 CRCU, 9 CRCI, 12 DTCW act through their pulses
+                default: ;  // 8 CRCU, 9 CRCI, 12 DTCW, 13 CRCBIT act through their pulses
               endcase
               program_counter <= pc_next;
             end

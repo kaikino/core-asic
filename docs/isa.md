@@ -67,7 +67,8 @@ Pin numbers used by `WAIT`, `JPH`, `JPL` and `SHIN`:
 | C | `mov/add/sub/and/or/xor rd, rs` | ALU (`fn = imm[3:0]`); `add`/`sub` set `C` (carry / borrow) |
 | C | `movc rd` / `not rd` | `rd = C` / `rd = ~rd` |
 | C | `pop rd` | `rd` = next byte of the host data FIFO, `C` = byte was valid; in FCS mode the four bytes after the data are the CRC-32 FCS |
-| C | `crci` / `crcu rd` / `crcb rd, k` | CRC-32: initialise / fold `rd` in / `rd` = FCS byte `k` (0 = first on the wire) |
+| C | `crci` / `crcu rd` / `crcb rd, k` | CRC: initialise / fold byte `rd` in (LSB first) / `rd` = check value byte `k` (0 = first on the wire) |
+| C | `crcbit` | fold one bit, the carry, into the CRC (for bit-oriented framings such as CAN and USB tokens) |
 | C | `dtcw rd, ch` | DTC channel `ch` delay tap = `rd` stages |
 | D | `trace imm8` / `trace rs` | write a timestamped event to the trace buffer |
 | D | `mbox rs` | post a byte to the host mailbox |
@@ -106,6 +107,7 @@ that value is captured while `CFG_CS_N` is high, so read with two frames:
 | 7 | CAPTURE | `[12:0]` watched pins (bit 12 = TRIGGER_IN), `[15:13]` trigger source, `[16]` capture pin changes, `[17]` stop when full |
 | 8 | READSEL | `[2:0]` readback register |
 | 9 | FIFO | `[7:0]` byte, `[8]` push, `[9]` reset FIFO and CRC, `[10]` FCS mode (fold every popped byte into the CRC and return the FCS after the data) |
+| B | CRC | `[27:26]` 0 polynomial, 1 initial value, 2 final XOR; `[25:24]` byte lane; `[7:0]` byte (defaults: CRC-32 `0xEDB88320`, `0xFFFFFFFF`, `0xFFFFFFFF`) |
 | A | TIMING | `[27]` channel; `[26]=0` TDC: `[3:0]` source (0-7 GPIO, 8-11 TARGET_IN, 12 TRIGGER_IN, 13 calibration toggle, 15 off), `[8]` trace its edges; `[26]=1` DTC: `[2:0]` TARGET_OUT pin, `[8]` enable, `[23:16]` delay tap |
 
 Trigger sources: 0 immediately on arm, 1 TRIGGER_IN rising, 2 TRIGGER_IN
@@ -129,12 +131,19 @@ consumes it for slow protocols, or ahead of time for fast ones; `pop rd`
 takes the next byte in one clock, so a 10 Mbit/s Manchester program can
 stream a whole Ethernet frame (see `examples/manchester_tx.pio`).  Either
 engine may pop; if both pop in the same clock they receive the same byte.
-The CRC-32 register (reflected polynomial `0xEDB88320`, initial and final
-value `0xFFFFFFFF`, i.e. the Ethernet FCS) is updated by `crcu` or, in FCS
-mode, by every data byte popped; once the FIFO is empty the next four pops
-return the FCS least-significant byte first, which is Ethernet wire order.
-`crcb rd, k` reads the same bytes explicitly for other framings.  The CRC-32
-check value of "123456789" is `0xCBF43926`.
+The CRC unit is a 32-bit reflected (LSB-first) register with a
+host-programmable polynomial, initial value and final XOR (CRC frame);
+the defaults are the Ethernet CRC-32 (`0xEDB88320`, `0xFFFFFFFF`,
+`0xFFFFFFFF`).  It is updated by `crcu` (a byte), `crcbit` (the carry) or,
+in FCS mode, by every data byte popped; once the FIFO is empty the next four
+pops return the check value XORed with the final value, least-significant
+byte first, which is Ethernet wire order.  `crcb rd, k` reads the same bytes
+explicitly.  A shorter CRC uses the low bits: CRC-16/USB is `0xA001`,
+`0xFFFF`, `0xFFFF`; CRC-5/USB is `0x14`, `0x1F`, `0x1F`; a non-reflected
+CRC such as CAN's CRC-15 (`0x4599`) is run with the reflected polynomial
+(`0x4CD1`), bits fed most-significant first with `crcbit`, and the register
+read out bit-reversed.  Check values of "123456789": CRC-32 `0xCBF43926`,
+CRC-16/USB `0xB4C8`, CRC-5/USB `0x19`, CRC-15/CAN `0x059E`.
 
 ## Sub-clock timing
 

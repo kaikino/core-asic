@@ -21,7 +21,8 @@ Syntax (case-insensitive, `#` `;` `//` start comments, labels end with `:`):
     shl   r0                      ; shr | shin_lsb r0, GPIO1 | shin_msb r0, GPIO1
     mov   r0, r1                  ; add sub and or xor movc not
     pop   r0                      ; next host FIFO byte, C = valid
-    crci | crcu r0 | crcb r1, 2   ; CRC-32 init / fold r0 / read FCS byte 2
+    crci | crcu r0 | crcb r1, 2   ; CRC init / fold byte r0 / read check byte 2
+    crcbit                        ; fold one bit (the carry) into the CRC
     dtcw  r0, 1                   ; DTC channel 1 delay tap = r0
     trace 0x42 | trace r0 | mbox r0 | done
     halt | nop
@@ -49,7 +50,7 @@ WAIT_COND = {"low": 0, "high": 1, "rise": 2, "fall": 3}
 BR_COND = {"jnz": 0, "djnz": 1, "jz": 2, "djz": 3}
 SHIFT_MODE = {"shl": 0, "shr": 1, "shin_lsb": 2, "shin_msb": 3}
 ALU_FN = {"mov": 0, "add": 1, "sub": 2, "and": 3, "or": 4, "xor": 5, "movc": 6, "not": 7,
-          "crcu": 8, "crci": 9, "crcb": 10, "pop": 11, "dtcw": 12}
+          "crcu": 8, "crci": 9, "crcb": 10, "pop": 11, "dtcw": 12, "crcbit": 13}
 EVT_SUB = {"trace": 0, "mbox": 2, "done": 3}
 PINS = {**{f"gpio{i}": i for i in range(8)}, **{f"in{i}": 8 + i for i in range(4)},
         "trig": 12, "mbox_in": 13, "mbox_out": 14, "peer": 15}
@@ -147,7 +148,7 @@ def encode(mnemonic: str, args: list[str], symbols: dict[str, int]) -> int:
         pin = _pin(a[1], symbols) if n == 2 else 0
         return (OPC["shift"] << 12) | (_reg(a[0]) << 10) | (SHIFT_MODE[m] << 8) | pin
     if m in ALU_FN:
-        if m == "crci":
+        if m in ("crci", "crcbit"):
             return (OPC["alu"] << 12) | ALU_FN[m]
         rd = _reg(a[0])
         if m == "crcb":
@@ -244,11 +245,11 @@ def disassemble(word: int) -> str:
         name = ['shl', 'shr', 'shin_lsb', 'shin_msb'][sub]
         return f"{name} r{rd}" + (f", {pin[imm & 15]}" if sub >= 2 else "")
     if op == 0xC:
-        names = ['mov', 'add', 'sub', 'and', 'or', 'xor', 'movc', 'not', 'crcu', 'crci', 'crcb', 'pop', 'dtcw']
+        names = ['mov', 'add', 'sub', 'and', 'or', 'xor', 'movc', 'not', 'crcu', 'crci', 'crcb', 'pop', 'dtcw', 'crcbit']
         if (imm & 15) >= len(names):
             return f".word 0x{word:04x}  ; illegal ALU fn"
         fn = names[imm & 15]
-        if fn == 'crci': return "crci"
+        if fn in ('crci', 'crcbit'): return fn
         if fn == 'crcb': return f"crcb r{rd}, {(imm >> 4) & 3}"
         if fn == 'dtcw': return f"dtcw r{rd}, {(imm >> 4) & 1}"
         return f"{fn} r{rd}" + (f", r{sub}" if fn in ('mov', 'add', 'sub', 'and', 'or', 'xor') else "")
