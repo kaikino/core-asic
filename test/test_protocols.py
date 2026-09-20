@@ -188,3 +188,85 @@ async def test_ps2_device(dut):
     assert host.bytes == codes, host.bytes
     assert not host.errors, host.errors
     assert h.uio_out & 0x03 == 0, "open-drain lines never drive high"
+
+
+@cocotb.test()
+async def test_can_transmit(dut):
+    """CAN 2.0A data frame with bit stuffing and CRC-15, acknowledged by a monitor."""
+    from proto_ref import cmd_crc_config, cmd_fifo
+    from protocols import CanMonitor, can_frame_bits
+    h = await setup(dut)
+    bit_clocks = 60
+    mon = CanMonitor(bit_clocks)
+
+    def bus(hh):
+        tx = hh.uio_out & 1 if hh.uio_oe & 1 else 1
+        bus_level = 0 if mon.ack_active() else tx     # wired-AND with the monitor's ACK
+        mon.step(bus_level)
+        hh.uio_in = (hh.uio_in & ~0x02) | (bus_level << 1)
+    h.after_tick = bus
+    h.uio_in = 0x02
+    for f in cmd_crc_config(0x4CD1, 0, 0):
+        await h.xfer(f)
+    ident, data = 0x123, bytes([0xDE, 0xAD, 0x7F, 0x00])   # 0x7F/0x00 provoke stuffing
+    await h.xfer(cmd_fifo(reset=True))
+    for b in can_frame_bits(ident, data):
+        await h.xfer(cmd_fifo(b, push=True))
+    await h.load(0, example("can_tx.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    await h.tick(140 * bit_clocks)
+    status = await h.wait_idle(0)
+    assert status & 0x04, "DONE"
+    assert mon.frames, "no frame decoded"
+    f = mon.frames[0]
+    assert (f["id"], f["dlc"], f["data"]) == (ident, len(data), data), f
+    assert f["crc_ok"], f
+    assert f["rtr"] == 0 and f["ide"] == 0 and f["crc_delim"] == 1 and f["ack_delim"] == 1, f
+    assert f["ack_slot"] == 0, "monitor's ACK seen on the bus"
+    assert f["stuff_bits"] >= 1, "stuffing exercised"
+    entries = await read_trace(h, 1)
+    assert entries[0] & 0xFF == 0, "transmitter saw the ACK"
+
+
+@cocotb.test()
+async def test_usb_ls_data_packet(dut):
+    """Low-speed USB DATA packet: SYNC, PID, payload, CRC-16, NRZI, bit stuffing, EOP."""
+    from proto_ref import cmd_crc_config, cmd_fifo
+    from protocols import UsbLsDecoder
+    h = await setup(dut)
+    bit_clocks = 27
+    dec = UsbLsDecoder(bit_clocks)
+
+    def bus(hh):
+        oe, o = hh.uio_oe, hh.uio_out
+        dp = (o & 1) if oe & 1 else 0
+        dm = ((o >> 1) & 1) if oe & 2 else 1      # idle J through the pull-up on D-
+        dec.step(dp, dm)
+    h.after_tick = bus
+    for f in cmd_crc_config(0xA001, 0xFFFF, 0xFFFF):
+        await h.xfer(f)
+    # First 8 bytes of a device descriptor plus two 0xFF bytes that force bit stuffing.
+    payload = bytes([0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08, 0xFF, 0xFF])
+    await h.xfer(cmd_fifo(reset=True))
+    for b in payload:
+        await h.xfer(cmd_fifo(b, push=True))
+    await h.load(0, example("usb_ls_tx.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    await h.xfer(cmd_mbox(0, 0xC3))                      # DATA0
+    await h.tick(150 * bit_clocks)
+    status = await h.wait_idle(0)
+    assert status & 0x04, "DONE"
+    assert dec.packets, "no packet decoded"
+    p = dec.packets[0]
+    assert p["sync_ok"] and not p["stuff_error"], p
+    assert p["pid"] == 0xC3, hex(p["pid"])
+    assert p["payload"][:len(payload)] == payload, p["payload"].hex()
+    c = 0xFFFF                                            # CRC-16/USB, sent LSB first
+    for byte in payload:
+        c ^= byte
+        for _ in range(8):
+            c = (c >> 1) ^ (0xA001 if c & 1 else 0)
+    c ^= 0xFFFF
+    assert list(p["payload"][len(payload):]) == [c & 0xFF, c >> 8], (p["payload"].hex(), hex(c))

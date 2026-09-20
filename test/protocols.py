@@ -284,3 +284,162 @@ class Ps2Host:
                 self.bytes.append(value)
                 self.bits = []
         self.clk = clk
+
+
+def can_crc15(bits: list[int]) -> int:
+    """Standard CAN CRC-15 (polynomial 0x4599) over a bit list, MSB first."""
+    crc = 0
+    for b in bits:
+        crc = ((crc << 1) ^ (0x4599 if ((crc >> 14) ^ b) & 1 else 0)) & 0x7FFF
+    return crc
+
+
+def can_frame_bits(ident: int, data: bytes) -> list[int]:
+    """Unstuffed SOF..data bits of a standard data frame (what the FIFO carries)."""
+    bits = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [0, 0, 0]
+    bits += [(len(data) >> i) & 1 for i in range(3, -1, -1)]
+    for byte in data:
+        bits += [(byte >> i) & 1 for i in range(7, -1, -1)]
+    return bits
+
+
+class CanMonitor:
+    """Samples a CAN TX line once per clock, resynchronises on edges, removes
+    stuff bits, parses a standard data frame, checks its CRC-15 and pulls the
+    bus dominant during the ACK slot."""
+
+    def __init__(self, bit_clocks: int):
+        self.bit = bit_clocks
+        self.prev = 1
+        self.t = 0
+        self.next_sample = None
+        self.raw: list[int] = []      # stuffed bits as sampled
+        self.bits: list[int] = []     # unstuffed
+        self.run_val, self.run_len = None, 0
+        self.expect_stuff = False
+        self.frames: list[dict] = []
+        self.ack_from = self.ack_until = None
+        self.in_frame = False
+        self.stuff_bits = 0
+
+    def ack_active(self) -> bool:
+        return self.ack_from is not None and self.ack_from <= self.t < self.ack_until
+
+    def step(self, line: int) -> None:
+        self.t += 1
+        if not self.in_frame:
+            if self.prev == 1 and line == 0:          # SOF edge: hard sync
+                self.in_frame = True
+                self.next_sample = self.t + self.bit // 2
+                self.raw, self.bits, self.run_val, self.run_len = [], [], None, 0
+                self.expect_stuff, self.stuff_bits = False, 0
+        else:
+            if self.prev == 1 and line == 0:           # resynchronise on recessive->dominant edges
+                self.next_sample = self.t + self.bit // 2
+            if self.t == self.next_sample:
+                self.next_sample += self.bit
+                self._bit(line)
+        self.prev = line
+
+    def _bit(self, b: int) -> None:
+        self.raw.append(b)
+        n = len(self.bits)
+        if self.expect_stuff:                          # stuffed region: SOF..CRC
+            self.expect_stuff = False
+            self.stuff_bits += 1
+            self.run_val, self.run_len = b, 1
+            return
+        self.bits.append(b)
+        # stuffing applies up to and including the CRC (before the delimiter)
+        dlc = self._dlc()
+        crc_end = 19 + 8 * dlc + 15 if dlc is not None else None
+        if crc_end is None or len(self.bits) < crc_end:
+            if b == self.run_val:
+                self.run_len += 1
+            else:
+                self.run_val, self.run_len = b, 1
+            if self.run_len == 5:
+                self.expect_stuff = True
+        if crc_end is not None and len(self.bits) == crc_end + 1:   # CRC delimiter sampled
+            self.ack_from = self.next_sample - self.bit // 2 + 1      # ACK slot start
+            self.ack_until = self.ack_from + self.bit
+        if crc_end is not None and len(self.bits) == crc_end + 1 + 1 + 1 + 7:
+            self._finish()
+
+    def _dlc(self):
+        if len(self.bits) >= 19:
+            return sum(self.bits[15 + i] << (3 - i) for i in range(4))
+        return None
+
+    def _finish(self) -> None:
+        bits = self.bits
+        dlc = self._dlc()
+        ident = sum(bits[1 + i] << (10 - i) for i in range(11))
+        data = bytes(sum(bits[19 + 8 * k + i] << (7 - i) for i in range(8)) for k in range(dlc))
+        crc_rx = sum(bits[19 + 8 * dlc + i] << (14 - i) for i in range(15))
+        crc_ok = crc_rx == can_crc15(bits[: 19 + 8 * dlc])
+        fields = {"id": ident, "dlc": dlc, "data": data, "crc_ok": crc_ok,
+                  "rtr": bits[12], "ide": bits[13], "stuff_bits": self.stuff_bits,
+                  "crc_delim": bits[19 + 8 * dlc + 15], "ack_slot": bits[19 + 8 * dlc + 16],
+                  "ack_delim": bits[19 + 8 * dlc + 17], "eof": bits[19 + 8 * dlc + 18:]}
+        self.frames.append(fields)
+        self.in_frame = False
+
+
+class UsbLsDecoder:
+    """Decodes low-speed USB packets from per-clock samples of D+ and D-.
+
+    Bits are sampled at the centre of each bit time after the first K of
+    SYNC, resynchronising on every transition; NRZI is decoded, stuff bits
+    removed after six 1s, bytes assembled LSB first; SE0 ends the packet."""
+
+    def __init__(self, bit_clocks: int):
+        self.bit = bit_clocks
+        self.t = 0
+        self.state = "idle"
+        self.prev = (0, 1)       # (D+, D-) idle J
+        self.next_sample = None
+        self.last_level = None
+        self.ones = 0
+        self.bits: list[int] = []
+        self.packets: list[dict] = []
+        self.se0_count = 0
+
+    def step(self, dp: int, dm: int) -> None:
+        self.t += 1
+        level = (dp, dm)
+        if self.state == "idle":
+            if level == (1, 0) and self.prev == (0, 1):         # first K of SYNC
+                self.state = "packet"
+                self.next_sample = self.t + self.bit // 2
+                self.last_level, self.ones, self.bits, self.se0_count = (0, 1), 0, [], 0
+        else:
+            if level != self.prev and level != (0, 0):
+                self.next_sample = self.t + self.bit // 2
+            if self.t == self.next_sample:
+                self.next_sample += self.bit
+                if level == (0, 0):
+                    self.se0_count += 1
+                    if self.se0_count >= 2:
+                        self._finish()
+                else:
+                    bit = 1 if level == self.last_level else 0
+                    self.last_level = level
+                    if self.ones == 6:                            # stuff bit: must be 0
+                        self.ones = 0
+                        if bit != 0:
+                            self.bits.append(-1)                  # marks a stuffing error
+                    else:
+                        self.bits.append(bit)
+                        self.ones = self.ones + 1 if bit else 0
+        self.prev = level
+
+    def _finish(self) -> None:
+        bits = [b for b in self.bits]
+        raw = bits
+        nbytes = len(raw) // 8
+        data = [sum((raw[8 * k + i] & 1) << i for i in range(8)) for k in range(nbytes)]
+        pkt = {"sync_ok": data[:1] == [0x80], "pid": data[1] if len(data) > 1 else None,
+               "payload": bytes(data[2:]), "stuff_error": -1 in raw, "bits": len(raw)}
+        self.packets.append(pkt)
+        self.state = "idle"

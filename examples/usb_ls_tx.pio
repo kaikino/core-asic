@@ -1,0 +1,96 @@
+; USB low-speed (1.5 Mbit/s) device transmitter: one DATA packet from the
+; FIFO with CRC-16 from the CRC unit, NRZI encoded with bit stuffing, then
+; EOP (SE0 for two bit times, then J).  GPIO0 D+, GPIO1 D- (driven only while
+; transmitting; the line idles at J = D- high).  D+ doubles as the "current
+; level" flag: NRZI needs "toggle", and the engine can branch on a pad.
+; GPIO6/GPIO7 are private scratch pins holding the byte-source phase:
+; 00 PID from the mailbox, 01 payload from the FIFO, 10/11 the CRC bytes.
+;
+; Host setup: CRC frames select CRC-16/USB (0xA001, 0xFFFF, 0xFFFF); the FIFO
+; holds the payload (FCS mode off; the program folds bytes with CRCU and
+; sends the two CRC bytes itself); the mailbox holds the PID (0xC3 DATA0 or
+; 0x4B DATA1).  Bit time = 27 clocks (1.48 Mbit/s, inside the 1.5 %
+; low-speed tolerance).  Traces 0xEE at EOP.
+        movi  r1, 0x02
+        out   r1, UIO, 0xC3      ; J, phase 00
+        movi  r1, 0xC3
+        out   r1, UIO_OE, 0xC3
+        wait  HIGH, MBOX_IN
+        crci
+        movi  r2, 6              ; six 1s then a stuffed 0
+        delay 26
+; ---- SYNC 0x80 = 00000001 LSB first: seven toggles then one hold ----
+        movi  r1, 7
+syn:    jph   GPIO0, synk
+        movi  r3, 0x01
+        out   r3, UIO, 0x03
+        jmp   synd
+synk:   movi  r3, 0x02
+        out   r3, UIO, 0x03
+        nop
+synd:   delay 21
+        djnz  r1, syn
+        delay 3                  ; the final 1 of SYNC holds the line (rest of the bit is the byte-source path)
+; ---- byte source by phase ----
+fbyte:  jph   GPIO7, ph23
+        jph   GPIO6, ph1
+        in    r0, MBOX           ; phase 00: PID
+        setp  UIO, 6, 1
+        jmp   go
+ph1:    pop   r0                 ; phase 01: payload
+        movc  r3
+        jz    r3, toph2
+        crcu  r0
+        jmp   go
+toph2:  setp  UIO, 7, 1          ; phase 10: first CRC byte
+        setp  UIO, 6, 0
+        crcb  r0, 0
+        jmp   go
+ph23:   jph   GPIO6, eop         ; phase 11 revisited: packet complete
+        setp  UIO, 6, 1          ; phase 11: second CRC byte
+        crcb  r0, 1
+go:     movi  r1, 8
+        delay 12
+bit:    shr   r0                 ; C = next bit
+        movc  r3
+        jz    r3, zero
+        djnz  r2, one            ; a 1 holds the line
+        delay 18                 ; sixth 1: hold, then a stuffed 0
+        movi  r2, 6
+        jph   GPIO0, sk
+        movi  r3, 0x01
+        out   r3, UIO, 0x03      ; -> K
+        jmp   sd
+sk:     movi  r3, 0x02
+        out   r3, UIO, 0x03      ; -> J
+        nop
+sd:     djnz  r1, sc
+        jmp   fbyte
+sc:     delay 15
+        jmp   bit
+one:    delay 2
+        jmp   next
+zero:   movi  r2, 6              ; a 0 toggles the line
+        jph   GPIO0, tk
+        movi  r3, 0x01
+        out   r3, UIO, 0x03      ; -> K
+        jmp   next
+tk:     movi  r3, 0x02
+        out   r3, UIO, 0x03      ; -> J
+        nop
+next:   djnz  r1, cont
+        jmp   fbyte
+cont:   delay 15
+        jmp   bit
+; ---- EOP ----
+eop:    delay 14
+        movi  r1, 0x00
+        out   r1, UIO, 0x03      ; SE0
+        delay 26
+        delay 26
+        movi  r1, 0x02
+        out   r1, UIO, 0x03      ; J
+        delay 26
+        trace 0xEE
+        done
+        halt

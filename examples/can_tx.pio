@@ -1,0 +1,108 @@
+; CAN 2.0A transmitter: standard data frame with bit stuffing, CRC-15, CRC
+; delimiter, ACK slot check, ACK delimiter, EOF and IFS.
+; GPIO0 CAN_TX (to the transceiver, dominant = 0), GPIO1 CAN_RX (from it).
+; GPIO7 is a private scratch pin holding the previous bit for the stuffing
+; rule (the engine can branch on a pin but not on its carry).
+;
+; Host setup: CRC frames select CRC-15 (reflected polynomial 0x4CD1, init 0,
+; xorout 0); the FIFO holds the unstuffed SOF..data bits, one bit per byte
+; (CAN fields are not byte aligned); PERM must include GPIO7.  Traces 0x00
+; when the ACK slot was dominant (a receiver acknowledged), 0x01 otherwise.
+; Bit time = BIT clocks (60 = 667 kbit/s at 40 MHz).
+.equ BIT  60
+.equ PAD  44                     ; BIT minus the instructions around a normal bit
+.equ PADS 48                     ; same for the run-of-five path
+        movi  r1, 0x01
+        out   r1, UIO, 0x81      ; TX recessive, scratch = 1 (bus idle level)
+        movi  r1, 0x81
+        out   r1, UIO_OE, 0x81   ; then drive TX and the scratch pin
+        crci
+        movi  r2, 5              ; run countdown: 5 equal bits trigger a stuff bit
+        delay BIT
+; ---- data bits from the FIFO (SOF, ID, RTR, IDE, r0, DLC, data) ----
+dbit:   pop   r0
+        movc  r3
+        jz    r3, crcfld         ; FIFO empty: on to the CRC field
+        shr   r0                 ; C = bit
+        crcbit                   ; CRC over unstuffed bits only
+        setp  UIO, 0, C
+        movc  r3
+        delay 3                  ; scratch pin readable (synchroniser latency)
+        jph   GPIO7, dwas1
+        jnz   r3, ddiff
+        jmp   dsame
+dwas1:  jz    r3, ddiff
+dsame:  djnz  r2, dkeep
+        setp  UIO, 7, NC         ; run of five: stuff bit ~C follows
+        delay PADS
+        setp  UIO, 0, NC
+        movi  r2, 5
+        delay PADS
+        delay 3
+        jmp   dbit
+ddiff:  movi  r2, 4
+dkeep:  setp  UIO, 7, C
+        delay PAD
+        jmp   dbit
+; ---- CRC field: 15 bits, MSB of the standard CRC first (= LSB of ours) ----
+crcfld: crcb  r0, 0
+        movi  r1, 8
+cbit:   shr   r0
+        setp  UIO, 0, C
+        movc  r3
+        delay 3
+        jph   GPIO7, cwas1
+        jnz   r3, cdiff
+        jmp   csame
+cwas1:  jz    r3, cdiff
+csame:  djnz  r2, ckeep
+        setp  UIO, 7, NC
+        delay PADS
+        setp  UIO, 0, NC
+        movi  r2, 5
+        delay PADS
+        delay 3
+        jmp   cnext
+cdiff:  movi  r2, 4
+ckeep:  setp  UIO, 7, C
+        delay PAD
+cnext:  djnz  r1, cbit
+        movi  r1, 7
+        crcb  r0, 1              ; remaining 7 CRC bits (stuffing run continues)
+c2bit:  shr   r0
+        setp  UIO, 0, C
+        movc  r3
+        delay 3
+        jph   GPIO7, c2was1
+        jnz   r3, c2diff
+        jmp   c2same
+c2was1: jz    r3, c2diff
+c2same: djnz  r2, c2keep
+        setp  UIO, 7, NC
+        delay PADS
+        setp  UIO, 0, NC
+        movi  r2, 5
+        delay PADS
+        delay 3
+        jmp   c2next
+c2diff: movi  r2, 4
+c2keep: setp  UIO, 7, C
+        delay PAD
+c2next: djnz  r1, c2bit
+; ---- CRC delimiter, ACK slot, ACK delimiter, EOF, IFS (no stuffing) ----
+        setp  UIO, 0, 1          ; CRC delimiter (recessive)
+        delay BIT
+        setp  UIO, 0, 1          ; ACK slot: transmitter recessive, sample the bus
+        delay 42
+        in    r3, UIO_IN
+        movi  r1, 0x02
+        and   r3, r1
+        shr   r3
+        trace r3                 ; 0 = acknowledged
+        delay 14
+        movi  r1, 11             ; ACK delimiter + EOF (7) + IFS (3)
+eof:    setp  UIO, 0, 1
+        delay BIT
+        djnz  r1, eof
+        done
+        halt

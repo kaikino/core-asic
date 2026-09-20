@@ -93,6 +93,10 @@ class Harness:
             # Pads are driven exactly 1 ns after the edge (PAD_EDGE_OFFSET_PS in
             # the model) so the TDC fine times of input edges are predictable.
             await Timer(1, unit="ns")
+            # A driven GPIO pad reads back its own value; peers may override
+            # the pins they drive in after_tick.
+            driven = self.uio_oe
+            self.uio_in = (self.uio_in & ~driven & 0xFF) | (self.uio_out & driven)
             if self.after_tick:
                 self.after_tick(self)
 
