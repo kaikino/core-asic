@@ -347,6 +347,7 @@ class Chip:
         self.fcs_idx = 0
         self.crc = 0xFFFFFFFF
         self.crc_poly, self.crc_init_val, self.crc_xorout = 0xEDB88320, 0xFFFFFFFF, 0xFFFFFFFF
+        self._crc_pending = None
         # registered command side effects (take effect one edge later)
         self._prog_we = [False, False]
         self._prog_waddr = 0
@@ -463,13 +464,20 @@ class Chip:
         bit_upd = e[0].crc_bit_update or e[1].crc_bit_update
         bit_in = e[0].carry_before if e[0].crc_bit_update else e[1].carry_before
         init = e[0].crc_init or e[1].crc_init
+        # A fold requested in the previous step is applied now (registered in RTL).
         crc_next = self.crc
+        if self._crc_pending:
+            kind, val = self._crc_pending
+            crc_next = (crc32_byte(self.crc, val, self.crc_poly) if kind == "byte"
+                        else crc_step(self.crc, val, self.crc_poly))
         if upd:
-            crc_next = crc32_byte(self.crc, upd_byte, self.crc_poly)
+            self._crc_pending = ("byte", upd_byte)
         elif pop and self.fifo and self.fcs_mode:
-            crc_next = crc32_byte(self.crc, self.fifo[0], self.crc_poly)
+            self._crc_pending = ("byte", self.fifo[0])
         elif bit_upd:
-            crc_next = crc_step(self.crc, bit_in, self.crc_poly)
+            self._crc_pending = ("bit", bit_in)
+        else:
+            self._crc_pending = None
         if pop:
             if self.fifo:
                 self.fifo.pop(0)

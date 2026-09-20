@@ -143,15 +143,10 @@ module tt_um_kaikino_protocol_emu #(
   reg  [31:0] crc_poly, crc_init_val, crc_xorout;
   wire        fifo_empty = (fifo_count == {(FIFO_AW+1){1'b0}});
   wire        fifo_full  = fifo_count[FIFO_AW];
-`ifdef SYNTH
-  // iCE40 build: falling-edge read maps the FIFO to block RAM (see the RAM
-  // wrappers); the ASIC array is read asynchronously.
-  reg  [7:0]  fifo_head_q;
-  always @(negedge clk) fifo_head_q <= fifo_mem[fifo_rptr];
-  wire [7:0]  fifo_head  = fifo_head_q;
-`else
+  // Read asynchronously in every build: on the iCE40 this costs 1k logic
+  // cells (the board has room), but a falling-edge block-RAM read would
+  // leave the programmable CRC fold only half a 12 MHz cycle and miss timing.
   wire [7:0]  fifo_head  = fifo_mem[fifo_rptr];
-`endif
   wire [31:0] fcs        = crc ^ crc_xorout;
   wire [7:0]  fcs_byte   = fcs[fcs_idx*8 +: 8];
   wire        fcs_avail  = fcs_mode & ~fcs_done;
@@ -171,6 +166,11 @@ module tt_um_kaikino_protocol_emu #(
   wire [7:0]  crc_fold_byte = crc_update ? crc_in : fifo_head;
   wire        crc_bit_fold = e_crc_bit_update[0] | e_crc_bit_update[1];
   wire        crc_bit_in   = e_crc_bit_update[0] ? e_crc_bit[0] : e_crc_bit[1];
+  // Fold requests are registered and applied one clock later, so the
+  // instruction decode and the eight-level fold are not in the same cycle.
+  // A CRCB or FCS-byte POP in the clock right after a fold sees the old value.
+  reg         crc_fold_r, crc_bit_fold_r, crc_bit_r;
+  reg  [7:0]  crc_fold_byte_r;
 
   // Reflected CRC step: one bit, or eight bit-steps for a byte, per clock.
   function automatic [31:0] crc_step(input [31:0] c, input bit_in, input [31:0] poly);
@@ -351,6 +351,7 @@ module tt_um_kaikino_protocol_emu #(
       fifo_rptr <= {FIFO_AW{1'b0}}; fifo_wptr <= {FIFO_AW{1'b0}}; fifo_count <= {(FIFO_AW+1){1'b0}};
       fcs_mode <= 1'b0; fcs_done <= 1'b0; fcs_idx <= 2'd0; crc <= 32'hFFFFFFFF;
       crc_poly <= 32'hEDB88320; crc_init_val <= 32'hFFFFFFFF; crc_xorout <= 32'hFFFFFFFF;
+      crc_fold_r <= 1'b0; crc_bit_fold_r <= 1'b0; crc_bit_r <= 1'b0; crc_fold_byte_r <= 8'd0;
       for (k = 0; k < 2; k = k + 1) begin
         tdc_src[k] <= 4'd15; tdc_trace_en[k] <= 1'b0; tdc_fine[k] <= 8'd0;
         tdc_level[k] <= 1'b0; tdc_level_prev[k] <= 1'b0;
@@ -394,8 +395,10 @@ module tt_um_kaikino_protocol_emu #(
           if (fcs_idx == 2'd3) fcs_done <= 1'b1;
         end
       end
-      if (crc_fold)          crc <= crc_byte_fold(crc, crc_fold_byte, crc_poly);
-      else if (crc_bit_fold) crc <= crc_step(crc, crc_bit_in, crc_poly);
+      crc_fold_r <= crc_fold; crc_fold_byte_r <= crc_fold_byte;
+      crc_bit_fold_r <= crc_bit_fold & ~crc_fold; crc_bit_r <= crc_bit_in;
+      if (crc_fold_r)          crc <= crc_byte_fold(crc, crc_fold_byte_r, crc_poly);
+      else if (crc_bit_fold_r) crc <= crc_step(crc, crc_bit_r, crc_poly);
       if (crc_init) begin crc <= crc_init_val; fcs_idx <= 2'd0; fcs_done <= 1'b0; end
 
       // Mailboxes.

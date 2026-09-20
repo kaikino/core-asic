@@ -138,7 +138,9 @@ the defaults are the Ethernet CRC-32 (`0xEDB88320`, `0xFFFFFFFF`,
 in FCS mode, by every data byte popped; once the FIFO is empty the next four
 pops return the check value XORed with the final value, least-significant
 byte first, which is Ethernet wire order.  `crcb rd, k` reads the same bytes
-explicitly.  A shorter CRC uses the low bits: CRC-16/USB is `0xA001`,
+explicitly.  A fold takes effect one clock after the instruction, so a
+`crcb` or FCS-byte `pop` in the very next clock still sees the previous
+value.  A shorter CRC uses the low bits: CRC-16/USB is `0xA001`,
 `0xFFFF`, `0xFFFF`; CRC-5/USB is `0x14`, `0x1F`, `0x1F`; a non-reflected
 CRC such as CAN's CRC-15 (`0x4599`) is run with the reflected polynomial
 (`0x4CD1`), bits fed most-significant first with `crcbit`, and the register
