@@ -923,11 +923,13 @@ in the Icarus simulator.
   look at the RTL's internals, only at the pins.
 * `test_core.py` covers the host link, program loading and write lock,
   collisions and permissions, mailboxes, the illegal-opcode fault, trigger
-  capture, and the FIFO/CRC.
-* `test_protocols.py` runs the UART, SPI and I2C programs; `test_ethernet.py`
-  the 64-byte frame loopback; `test_random.py` random programs on both
-  engines with random pins, masks and FIFO traffic, then compares the final
-  status word and the whole trace buffer to the model.
+  capture, the FIFO/CRC and the programmable CRC (CRC-16/USB, CRC-15/CAN).
+* `test_protocols.py` runs the UART, SPI, I2C, JTAG, SWD, PS/2, CAN and USB
+  programs against their peers; `test_ethernet.py` the 64-byte frame
+  loopback; `test_timing.py` the delay-line calibration, edge timing, trace
+  entries and DTC placement; `test_random.py` random programs on both
+  engines with random pins, masks, FIFO and timing traffic, then compares
+  the final status word and the whole trace buffer to the model.
 * `formal/proto.sby` asks SymbiYosys to *prove* nine properties written in
   the `ifdef FORMAL` block at the end of the top level: no contested pin is
   driven, drives stay inside permissions, a stopped engine drives nothing,

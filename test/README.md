@@ -2,13 +2,15 @@
 
 ## cocotb suite (`make`)
 
-`test_core.py`, `test_protocols.py`, `test_ethernet.py` and `test_random.py`
-run under cocotb 2.0 with Icarus Verilog.  `proto_host.py` bit-bangs the SPI
+`test_core.py`, `test_protocols.py`, `test_ethernet.py`, `test_timing.py`
+and `test_random.py` run under cocotb 2.0 with Icarus Verilog.  `proto_host.py` bit-bangs the SPI
 host link and keeps the Python reference model (`tools/proto_ref.py`) in
 lock-step with the RTL: after every clock it compares `uio_out`, `uio_oe`,
 `uo_out[7:1]` and the timestamp, and at the end of a test the status word and
-the trace buffer.  `protocols.py` holds independent UART/SPI/I2C peers and a
-Manchester decoder that check the pin waveforms themselves.
+the trace buffer.  `protocols.py` holds independent UART, SPI, I2C, JTAG, SWD, PS/2, CAN and USB
+peers and decoders that check the pin waveforms themselves.  Driven GPIO
+pads are looped back into the inputs by the harness, as on silicon; peers
+override the pins they drive.
 
 ```sh
 cd test                    # the Makefile resolves paths from $PWD
