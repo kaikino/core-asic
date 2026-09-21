@@ -50,6 +50,7 @@ Three further choices set the architecture apart from a PIO clone:
 | CAN 2.0A frame: stuffing, CRC-15, ACK | `can_tx.pio` | destuffing monitor with CRC and ACK |
 | Low-speed USB DATA packet: NRZI, stuffing, CRC-16 | `usb_ls_tx.pio` | NRZI decoder |
 | Low-speed USB token capture | trace buffer | edge-timestamp decoder, CRC-5 |
+| Protocol-aware trigger: I2C address match starts the logic analyser | `i2c_watch.pio` | scripted master, captured edges all follow the match |
 | 10 Mbit/s Manchester Ethernet frame with FCS, and receiver | `manchester_tx.pio`, `manchester_rx.pio` | software decode and the second engine |
 | 10BASE-T link pulses | `link_pulse.pio` | |
 | Sub-clock edge timing and glitch placement | `edge_timer.pio`, `glitch_pulse.pio` | fine times compared to the model exactly |

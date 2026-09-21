@@ -1,0 +1,21 @@
+; Protocol-aware trigger: watches an I2C bus (GPIO0 SDA, GPIO1 SCL, inputs
+; only) and emits a TRACE event when a START is followed by the address
+; byte in .equ MATCH.  With CMD_CAPTURE trigger source 4 (engine 1 event)
+; and pin capture on SDA/SCL, the logic analyser then records every edge of
+; the transaction that follows: an oscilloscope-style serial trigger, in
+; microcode, for any framing the engine can decode.
+.equ MATCH 0xA0                      ; address 0x50, write
+idle:   wait  HIGH, GPIO0
+        wait  HIGH, GPIO1
+        wait  FALL, GPIO0            ; SDA falls while SCL high: START
+        jpl   GPIO1, idle
+        movi  r2, 8
+abit:   wait  LOW, GPIO1
+        wait  HIGH, GPIO1
+        shin_msb r0, GPIO0
+        djnz  r2, abit
+        movi  r1, MATCH
+        xor   r1, r0
+        jnz   r1, idle
+        trace r0                     ; match: fires the capture trigger
+        jmp   idle

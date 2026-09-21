@@ -197,3 +197,36 @@ async def test_programmable_crc(dut):
     entries = await read_trace(h, 2)
     reflected = int(format(0x059E, "015b")[::-1], 2)
     assert [e & 0xFF for e in entries] == [reflected & 0xFF, (reflected >> 8) & 0x7F], [hex(e & 0xFF) for e in entries]
+
+
+@cocotb.test()
+async def test_protocol_aware_trigger(dut):
+    """Engine 1 decodes I2C and its TRACE on a matching address triggers pin capture."""
+    from protocols import I2cMaster
+    h = await setup(dut)
+    # Two transactions: one to 0x2A (ignored), then one to 0x50 (triggers).
+    master = I2cMaster([("start",), ("write", 0x54), ("write", 0x01), ("stop",),
+                        ("start",), ("write", 0xA0), ("write", 0x03), ("stop",)], half_period=40)
+
+    def bus(hh):
+        scl_low, sda_low = master.step(1)
+        hh.uio_in = (hh.uio_in & ~0x03) | ((0 if scl_low else 1) << 1) | (0 if sda_low else 1)
+    h.uio_in = 0x03
+    await h.load(1, example("i2c_watch.pio"))
+    await h.xfer(cmd_perm(1, 0, 0))
+    await h.xfer(cmd_capture(watch=0x0003, trig_src=4, pin_capture=True))
+    await h.xfer(cmd_run(arm=True, start1=True, ts_reset=True))
+    h.after_tick = bus
+    await h.tick(40 * 2 * 9 * 5 + 800)
+    assert master.done
+    status = await h.read(READ_STATUS)
+    assert status & 0x2000, "capture triggered"
+    n = (status >> 16) & 0x3F
+    entries = await read_trace(h, n)
+    assert entries == h.model.trace[:n]
+    kinds = [(e >> 14) & 3 for e in entries]
+    assert kinds[0] == 0 and (entries[0] & 0xFF) == 0xA0, "first entry is the matching address event"
+    assert all(k == 1 for k in kinds[1:]) and len(kinds) > 10, "then captured bus edges"
+    # Every captured edge belongs to the second transaction: the first
+    # transaction ended before the trigger, so no entry precedes the event.
+    assert entries[0] >> 16 < min(e >> 16 for e in entries[1:])
