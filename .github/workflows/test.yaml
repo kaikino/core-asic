@@ -9,9 +9,9 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install iverilog
+      - name: Install iverilog and verilator
         shell: bash
-        run: sudo apt-get update && sudo apt-get install -y iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog verilator
 
       # Set Python up and install cocotb
       - name: Setup python
@@ -22,6 +22,17 @@ jobs:
       - name: Install Python packages
         shell: bash
         run: pip install -r test/requirements.txt
+
+      - name: Lint (ASIC and FPGA configurations)
+        run: |
+          verilator --lint-only -Wall -DSYNTH --top-module tt_um_kaikino_protocol_emu src/*.sv
+          verilator --lint-only -Wall --timing -DTDLY_PS=224 --top-module tt_um_kaikino_protocol_emu src/*.sv
+
+      - name: Unit tests (assembler, model)
+        run: python -m pytest -q test/test_assembler.py
+
+      - name: Smoke tests (plain Verilog)
+        run: cd test && make smoke
 
       - name: Run tests
         run: |
