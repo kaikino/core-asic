@@ -12,6 +12,7 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | RTL simulation | cocotb 2.0.1 + Icarus 13, 30 tests, model lock-step every clock incl. delay-line fine times | 30/30 pass (`cd test && make`) |
 | FPGA netlist simulation | same suite on the `synth_ice40` netlist (block-RAM memories, zero-delay chains) | 30/30 pass (`make FPGA=yes`) |
 | Formal | SymbiYosys 0.69 + z3, 9 safety properties | k-induction proof (depth 6) and BMC depth 24 pass |
+| Mutation check | `tools/mutate.py`, 7 injected RTL bugs vs core, protocol and timing tests | 7/7 caught |
 | Constrained random | soak: 10 seeds x 3000 cycles plus 10 x 800 with timing channels; two engines, random pads, masks, FIFO and timing traffic | pass; status word, FIFO level and trace buffer match the model |
 | Synthesis | Yosys (LibreLane) | 34 783 cells, 668 010 um2 before P&R buffering; 7 182 flops; 512 delay cells kept; 0 check errors |
 | Place and route | OpenROAD (LibreLane) | routed (detailed routing 15 217 -> 5 272 -> 4 299 -> 157 -> 0 violations), 0 antenna violations after 36 diodes; all 512 delay cells intact |

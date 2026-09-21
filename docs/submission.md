@@ -82,6 +82,11 @@ project spent the most effort.
 * **The same suite on three netlists**: RTL, the iCE40 FPGA netlist, and
   the final gate-level netlist from the ASIC flow.  What is taped out is
   what was tested.
+* **Mutation-checked.** `tools/mutate.py` injects seven single-line bugs
+  (a branch polarity, a dropped mask, a disabled collision rule, a CRC
+  polynomial applied on the wrong bit, a wrong edge condition, a trigger
+  that never fires, a TDC that ignores level) and reruns the suite; all
+  seven are caught.
 * **AI-assisted.** The design, model, tests and flow were built with an
   AI coding assistant; the model-lock-step method is what made that safe,
   because every generated change had to agree with an independent
