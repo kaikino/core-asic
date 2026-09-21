@@ -9,8 +9,8 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | Check | Tool | Result |
 |-------|------|--------|
 | Lint | Verilator 5.046 `-Wall`, both RTL and `-DSYNTH` configurations | clean |
-| RTL simulation | cocotb 2.0.1 + Icarus 13, 30 tests, model lock-step every clock incl. delay-line fine times | 30/30 pass (`cd test && make`) |
-| FPGA netlist simulation | same suite on the `synth_ice40` netlist (block-RAM memories, zero-delay chains) | 30/30 pass (`make FPGA=yes`) |
+| RTL simulation | cocotb 2.0.1 + Icarus 13, 31 tests, model lock-step every clock incl. delay-line fine times | 31/31 pass (`cd test && make`) |
+| FPGA netlist simulation | same suite on the `synth_ice40` netlist (block-RAM memories, zero-delay chains) | 31/31 pass (`make FPGA=yes`) |
 | Formal | SymbiYosys 0.69 + z3, 11 safety properties | k-induction proof (depth 6) and BMC depth 24 pass |
 | Mutation check | `tools/mutate.py`, 7 injected RTL bugs vs core, protocol and timing tests | 7/7 caught |
 | Constrained random | soak: 10 seeds x 3000 cycles plus 10 x 800 with timing channels; two engines, random pads, masks, FIFO and timing traffic | pass; status word, FIFO level and trace buffer match the model |
@@ -20,7 +20,7 @@ allocation 8x4 (1724.16 x 710.64 um), 40 MHz clock target (25 ns period).
 | DRC | Magic (flow step 62) | 0 errors, 0 illegal overlaps |
 | Precheck | tt-support-tools `precheck.py` with KLayout 0.30.12, tiled DRC (`flow/patch_precheck_tiling.py`) | all 9 checks pass on the final GDS with the generated 8x4 template |
 | LVS | netgen (flow step 66) | 0 device/net/pin mismatches |
-| Gate-level simulation | cocotb on the final netlist with CMOS5L cell models (zero-delay chains) | 30/30 pass on `final/nl` netlist (`make GATES=yes`) |
+| Gate-level simulation | cocotb on the final netlist with CMOS5L cell models (zero-delay chains) | 31/31 pass on `final/nl` netlist (`make GATES=yes`) |
 | FPGA bitstream | Yosys + nextpnr-ice40 (TT ASIC-sim UP5K board) | builds: ~2 800 / 5 280 logic cells (53 %), 4 block RAMs, Fmax 14.8 MHz (board clock 12 MHz); delay lines stubbed |
 
 ## Area and utilisation

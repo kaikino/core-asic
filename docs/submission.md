@@ -99,7 +99,7 @@ See `docs/signoff.md` for the record.  In one line: 8x4 CMOS5L at
 40 MHz, ~67 % utilisation, zero routing DRC, Magic DRC, LVS and antenna
 violations, setup and hold met at every corner, all 512 delay cells
 intact under a custom SDC, Tiny Tapeout precheck clean, RTL / FPGA /
-gate-level suites 30/30.
+gate-level suites 31/31.
 
 ## Limits, stated plainly
 
