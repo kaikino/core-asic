@@ -509,3 +509,72 @@ def usb_decode_from_edges(edges: list[tuple[int, int]], bit_clocks: int) -> dict
         out["endp"] = sum(body[7 + i] << i for i in range(4))
         out["crc5_ok"] = bits[27:32] == usb_crc5(body)
     return out
+
+
+class I2cMaster:
+    """Scripted open-drain I2C master, one bus sample per clock.
+
+    `script` is a list of operations: ("start",), ("write", byte),
+    ("read", ack_bool), ("stop",).  The master pulls lines low through
+    `scl_low`/`sda_low`; `step(sda_in)` advances one clock and returns
+    (scl_low, sda_low).  Results: `acks` (ACK bit seen after each write)
+    and `data` (bytes read)."""
+
+    def __init__(self, script: list, half_period: int):
+        self.script = list(script)
+        self.half = half_period
+        self.scl_low = False
+        self.sda_low = False
+        self.t = 0
+        self.acks: list[int] = []
+        self.data: list[int] = []
+        self.done = False
+        self._gen = self._run()
+        self._wait = 0
+
+    def _run(self):
+        H = self.half
+        def hold(n):
+            for _ in range(n):
+                yield None
+        for op in self.script:
+            if op[0] == "start":
+                # SDA falls while SCL high (bus idle or repeated start)
+                self.sda_low = False; self.scl_low = False; yield from hold(H)
+                self.sda_low = True; yield from hold(H)
+                self.scl_low = True; yield from hold(H)
+            elif op[0] == "write":
+                byte = op[1]
+                for i in range(7, -1, -1):
+                    self.sda_low = not ((byte >> i) & 1); yield from hold(H)
+                    self.scl_low = False; yield from hold(H)
+                    self.scl_low = True
+                self.sda_low = False; yield from hold(H)          # release for ACK
+                self.scl_low = False; yield from hold(H // 2)
+                self.acks.append(self._sda_in); yield from hold(H - H // 2)
+                self.scl_low = True; yield from hold(H)             # hold low before the next symbol
+            elif op[0] == "read":
+                value = 0
+                self.sda_low = False
+                for _ in range(8):
+                    yield from hold(H)
+                    self.scl_low = False; yield from hold(H // 2)
+                    value = (value << 1) | self._sda_in; yield from hold(H - H // 2)
+                    self.scl_low = True
+                self.data.append(value)
+                self.sda_low = bool(op[1]); yield from hold(H)      # ACK (low) or NACK
+                self.scl_low = False; yield from hold(H)
+                self.scl_low = True; yield from hold(H)
+                self.sda_low = False
+            elif op[0] == "stop":
+                self.sda_low = True; yield from hold(H)
+                self.scl_low = False; yield from hold(H)
+                self.sda_low = False; yield from hold(H)
+        self.done = True
+        while True:
+            yield None
+
+    def step(self, sda_in: int) -> tuple[bool, bool]:
+        self._sda_in = sda_in
+        next(self._gen)
+        return self.scl_low, self.sda_low

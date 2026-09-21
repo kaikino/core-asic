@@ -42,6 +42,7 @@ Three further choices set the architecture apart from a PIO clone:
 | UART 8N1 TX and RX | `uart_tx.pio`, `uart_rx.pio` | independent Python monitor and source |
 | SPI mode 0 master | `spi_master.pio` | Python slave, both directions |
 | I2C master, clock stretching | `i2c_master.pio` | ACKing Python slave |
+| I2C slave: EEPROM emulation from the FIFO | `i2c_eeprom.pio` | scripted Python master, repeated start, ACK/NACK |
 | JTAG IDCODE read | `jtag_idcode.pio` | 16-state TAP model |
 | SWD DPIDR read incl. JTAG-to-SWD switch | `swd_dpidr.pio` | SWD target model |
 | PS/2 device frames | `ps2_device.pio` | host monitor with parity |

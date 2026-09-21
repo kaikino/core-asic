@@ -1,0 +1,67 @@
+; I2C slave emulating a small EEPROM at address 0x50: a master writes one
+; address byte, then reads bytes sequentially; the data comes from the FIFO
+; (the host preloads the "memory" image, so this also emulates any chip
+; whose register read-out the host wants to script).  GPIO0 SDA, GPIO1 SCL,
+; both open drain (data register 0, OE pulls low).  Every byte received
+; from the master is traced; the address byte is also posted to the mailbox.
+;
+; Protocol handled: START, address+W, ACK, one address byte, ACK, repeated
+; START, address+R, ACK, data bytes with master ACK/NACK, STOP.
+; Bit-level structure: the slave samples SDA on each SCL rising edge and
+; changes SDA while SCL is low.  Requires SCL to be slower than about
+; 40 clocks per half period (the wait/branch chains take up to ~10 clocks).
+        movi  r1, 0x00
+        out   r1, UIO, 0x03
+        out   r1, UIO_OE, 0x03       ; both lines released
+idle:   wait  HIGH, GPIO0
+        wait  HIGH, GPIO1
+start:  wait  FALL, GPIO0            ; SDA falls while SCL high: START
+        jpl   GPIO1, idle            ; (SCL was low: not a START, resync)
+addr:   movi  r2, 8
+abit:   wait  LOW, GPIO1
+        wait  HIGH, GPIO1
+        shin_msb r0, GPIO0           ; address byte, MSB first
+        djnz  r2, abit
+        trace r0
+        mbox  r0
+        mov   r1, r0
+        shr   r1                     ; r1 = 7-bit address
+        movi  r3, 0x50
+        xor   r1, r3
+        jnz   r1, idle               ; not for us: stay quiet
+        wait  LOW, GPIO1
+        setp  UIO_OE, 0, 1           ; ACK: pull SDA low
+        wait  HIGH, GPIO1
+        wait  LOW, GPIO1
+        setp  UIO_OE, 0, 0           ; release SDA
+        movi  r1, 0x01
+        and   r1, r0                 ; R/W bit
+        jnz   r1, readout
+; ---- write: one address byte, acknowledged ----
+        movi  r2, 8
+wbit:   wait  LOW, GPIO1
+        wait  HIGH, GPIO1
+        shin_msb r0, GPIO0
+        djnz  r2, wbit
+        trace r0                     ; the "memory address"
+        wait  LOW, GPIO1
+        setp  UIO_OE, 0, 1           ; ACK
+        wait  HIGH, GPIO1
+        wait  LOW, GPIO1
+        setp  UIO_OE, 0, 0
+        jmp   idle                   ; repeated START (or STOP) follows
+; ---- read: bytes from the FIFO until the master NACKs ----
+readout: pop  r0
+rbyte:  movi  r2, 8
+rbit:   wait  LOW, GPIO1
+        shout_msb r0, UIO_OE, 0, INV ; SDA = bit (open drain: OE = ~bit)
+        wait  HIGH, GPIO1
+        djnz  r2, rbit
+        wait  LOW, GPIO1
+        setp  UIO_OE, 0, 0           ; release for the master's ACK
+        wait  HIGH, GPIO1
+        jph   GPIO0, done            ; NACK: master is finished
+        pop   r0                     ; ACK: next byte
+        jmp   rbyte
+done:   wait  LOW, GPIO1
+        jmp   idle

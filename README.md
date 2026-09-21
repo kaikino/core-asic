@@ -13,13 +13,13 @@ microprograms in `examples/`, not fixed blocks.
 | Process / flow | IHP SG13CMOS5L, Tiny Tapeout LibreLane flow (`tt-gds-action@ihp-cmos5l`) |
 | Tile allocation | 8x4 (`info.yaml`); local sign-off at 8x4 with `flow/harden.sh` |
 | Clock | 40 MHz (25 ns) |
-| Engines | 2 x (128 x 16 program words, 4 registers, carry, 12-bit delay) |
+| Engines | 2 x (128 x 16 program words, 4 registers, carry, 12-bit delay); programmable CRC unit |
 | Pins | 8 bidirectional GPIO, 4 sample-only inputs, 7 drive-only outputs, 4 host-link pins |
 | Trace | 32 entries x 32 bits, 16-bit timestamps, trigger + pin-change capture |
 | Data path | 128-byte host FIFO, one-clock pops, hardware CRC-32 (Ethernet FCS) |
 | Sub-clock timing | 2 TDC + 2 DTC channels on 128-stage delay lines: ~0.22 ns edge timing and placement from a 40 MHz clock, self-calibrating |
 | Host link | synchronous SPI mode 0, 32-bit frames, register readback on MISO |
-| Sign-off (8x4, 40 MHz) | setup slack +8.2 ns slow corner, hold met, 0 DRC/LVS/antenna, 53 % utilisation; see `docs/signoff.md` |
+| Sign-off (8x4, 40 MHz) | setup slack +5.9 ns slow corner, hold met, 0 DRC/LVS/antenna, 69 % utilisation, precheck clean; see `docs/signoff.md` |
 
 ## Layout
 

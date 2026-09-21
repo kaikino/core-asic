@@ -302,3 +302,38 @@ async def test_usb_ls_token_capture(dut):
     assert pkt["sync_ok"] and pkt["pid"] == 0x2D and pkt["addr"] == 0x15 and pkt["endp"] == 0, pkt
     assert pkt["crc5_ok"], pkt
     dut._log.info(f"captured {n} edges -> {pkt}")
+
+
+@cocotb.test()
+async def test_i2c_eeprom_emulation(dut):
+    """The chip emulates an I2C EEPROM at 0x50; a scripted master reads it."""
+    from proto_ref import cmd_fifo
+    from protocols import I2cMaster
+    h = await setup(dut)
+    image = [0xCA, 0xFE, 0xF0, 0x0D]
+    master = I2cMaster([("start",), ("write", 0xA0), ("write", 0x03), ("start",), ("write", 0xA1),
+                        ("read", True), ("read", True), ("read", True), ("read", False), ("stop",)],
+                       half_period=60)
+
+    def bus(hh):
+        slave_sda_low = bool(hh.uio_oe & 0x01)
+        slave_scl_low = bool(hh.uio_oe & 0x02)
+        scl_low, sda_low = master.step(0 if slave_sda_low else 1)
+        sda = 0 if (sda_low or slave_sda_low) else 1
+        scl = 0 if (scl_low or slave_scl_low) else 1
+        hh.uio_in = (hh.uio_in & ~0x03) | (scl << 1) | sda
+    h.uio_in = 0x03
+    await h.xfer(cmd_fifo(reset=True))
+    for b in image:
+        await h.xfer(cmd_fifo(b, push=True))
+    await h.load(0, example("i2c_eeprom.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    h.after_tick = bus
+    await h.tick(12000)
+    assert master.done, "master script did not finish"
+    assert master.acks == [0, 0, 0], master.acks
+    assert master.data == image, [hex(x) for x in master.data]
+    entries = await read_trace(h, 3)
+    assert [e & 0xFF for e in entries] == [0xA0, 0x03, 0xA1]
+    assert (await h.read(READ_MBOX)) & 0xFF == 0xA1
