@@ -67,6 +67,7 @@ fpga_netlist:
 # Plain-Verilog smoke tests (no cocotb needed):  make smoke
 SMOKE_TBS = smoke_cfg_tb smoke_pio_tb
 smoke:
+	@mkdir -p sim_build
 	@for tb in $(SMOKE_TBS); do \
 	  iverilog -g2012 -DTDLY_PS=224 -o sim_build/$$tb $$tb.sv $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES)) && vvp -n sim_build/$$tb | grep -v "finish called" || exit 1; \
 	done
