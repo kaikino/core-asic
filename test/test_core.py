@@ -230,3 +230,34 @@ async def test_protocol_aware_trigger(dut):
     # Every captured edge belongs to the second transaction: the first
     # transaction ended before the trigger, so no entry precedes the event.
     assert entries[0] >> 16 < min(e >> 16 for e in entries[1:])
+
+
+@cocotb.test()
+async def test_uart_autobaud_from_capture(dut):
+    """The capture buffer's edge timestamps reveal an unknown UART bit period."""
+    from protocols import UartSource
+    h = await setup(dut)
+    period = 37                                   # "unknown" to the analyser
+    src = UartSource(period, idle_gap=period)     # whole bit times between frames
+    src.send(0x55)                                # alternating bits: an edge every bit
+    src.send(0x0F)
+    src.stream = [1] * 40 + src.stream            # idle first so the line is high before capture
+    h.ui_target = 1                               # line idles high before the capture is armed
+    await h.xfer(cmd_capture(watch=0x0100, trig_src=5, pin_capture=True))   # TARGET_IN0 changes
+    await h.xfer(cmd_run(arm=True, ts_reset=True))
+
+    def feed(hh):
+        hh.ui_target = (hh.ui_target & ~1) | src.next()
+    h.after_tick = feed
+    await h.tick(2 * 11 * period + 100)
+    h.after_tick = None
+    n = ((await h.read(READ_STATUS)) >> 16) & 0x3F
+    entries = await read_trace(h, n)
+    assert entries == h.model.trace[:n]
+    stamps = [e >> 16 for e in entries if (e >> 14) & 3 == 1]
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    unit = min(gaps)                              # shortest gap = one bit time
+    assert unit == period, (unit, gaps)
+    assert all(g % unit == 0 for g in gaps), gaps
+    dut._log.info(f"{n} edges captured, inferred bit period {unit} clocks = {unit * 25} ns "
+                  f"({40e6 / unit:.0f} baud)")
