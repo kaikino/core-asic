@@ -1,0 +1,51 @@
+; SPI flash emulator (mode 0 slave): answers READ ID (0x9F) with three ID
+; bytes and READ (0x03 + 24-bit address) with data from the FIFO, both
+; until CS_N rises.  GPIO0 MOSI, GPIO1 SCK, GPIO2 CS_N (inputs), GPIO3 MISO
+; (driven only while selected).  Bytes are MSB first; MISO changes after the
+; falling SCK edge and is sampled by the master on the rising edge.
+; Every command byte is traced.  Requires SCK slower than ~30 clocks per
+; half period (the slave's per-bit path is about 8 clocks).
+        movi  r1, 0x00
+        out   r1, UIO, 0x08
+        out   r1, UIO_OE, 0x08       ; MISO released while idle
+idle:   wait  HIGH, GPIO2
+        wait  FALL, GPIO2            ; selected
+        movi  r2, 8
+cbit:   wait  LOW, GPIO1
+        wait  HIGH, GPIO1
+        shin_msb r0, GPIO0           ; command byte
+        djnz  r2, cbit
+        trace r0
+        movi  r1, 0x9F
+        xor   r1, r0
+        jz    r1, rdid
+        movi  r1, 0x03
+        xor   r1, r0
+        jnz   r1, idle               ; unknown command: ignore until deselected
+        movi  r1, 24                 ; READ: swallow the 24-bit address
+abit:   wait  LOW, GPIO1
+        wait  HIGH, GPIO1
+        djnz  r1, abit
+        setp  UIO_OE, 3, 1           ; drive MISO
+dbyte:  pop   r0                     ; next data byte from the FIFO (0 when empty)
+        movi  r2, 8
+dbit:   wait  LOW, GPIO1
+        shout_msb r0, UIO, 3         ; MISO = next bit, valid before SCK rises
+        jph   GPIO2, release         ; deselected
+        wait  HIGH, GPIO1
+        djnz  r2, dbit
+        jmp   dbyte
+rdid:   setp  UIO_OE, 3, 1
+        movi  r0, 0xEF               ; manufacturer, then device type and capacity
+        movi  r3, 3
+ibyte:  movi  r2, 8
+ibit:   wait  LOW, GPIO1
+        shout_msb r0, UIO, 3
+        jph   GPIO2, release
+        wait  HIGH, GPIO1
+        djnz  r2, ibit
+        movi  r0, 0x40               ; (second and third ID bytes are the same for this demo)
+        djnz  r3, ibyte
+        jmp   idle
+release: setp UIO_OE, 3, 0
+        jmp   idle

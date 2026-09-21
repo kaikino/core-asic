@@ -337,3 +337,32 @@ async def test_i2c_eeprom_emulation(dut):
     entries = await read_trace(h, 3)
     assert [e & 0xFF for e in entries] == [0xA0, 0x03, 0xA1]
     assert (await h.read(READ_MBOX)) & 0xFF == 0xA1
+
+
+@cocotb.test()
+async def test_spi_flash_emulation(dut):
+    """The chip emulates an SPI flash: READ ID and a READ served from the FIFO."""
+    from proto_ref import cmd_fifo
+    from protocols import SpiMaster
+    h = await setup(dut)
+    data = [0x11, 0x22, 0x33, 0x44, 0x55]
+    master = SpiMaster([[0x9F, 0, 0, 0], [0x03, 0x00, 0x00, 0x10, 0, 0, 0, 0, 0]], half_period=20)
+
+    def bus(hh):
+        miso = (hh.uio_out >> 3) & 1 if hh.uio_oe & 0x08 else 0
+        sck, mosi, cs_n = master.step(miso)
+        hh.uio_in = (hh.uio_in & ~0x07) | (cs_n << 2) | (sck << 1) | mosi
+    h.uio_in = 0x04
+    await h.xfer(cmd_fifo(reset=True))
+    for b in data:
+        await h.xfer(cmd_fifo(b, push=True))
+    await h.load(0, example("spi_flash.pio"))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    h.after_tick = bus
+    await h.tick(20 * 2 * 8 * 14 + 800)
+    assert master.done, "master script did not finish"
+    assert master.received[0][1:] == [0xEF, 0x40, 0x40], [hex(x) for x in master.received[0]]
+    assert master.received[1][4:] == data, [hex(x) for x in master.received[1]]
+    entries = await read_trace(h, 2)
+    assert [e & 0xFF for e in entries] == [0x9F, 0x03]

@@ -60,7 +60,8 @@ suite compares the RTL against it pin-for-pin on every clock.
    and transmits every byte written with a `MBOX` frame at the baud rate set
    by the `.equ BIT` constant.
 4. `examples/` also holds a UART receiver, an SPI master, an I2C master, a
-   an I2C EEPROM emulator (device side, data from the FIFO), a JTAG
+   an I2C EEPROM emulator and an SPI flash emulator (device side, data
+   from the FIFO), a JTAG
    master (IDCODE read), an SWD host (DPIDR read), a PS/2 device,
    a CAN 2.0A transmitter (bit stuffing, CRC-15, ACK), a low-speed USB
    packet transmitter (NRZI, bit stuffing, CRC-16) with token capture

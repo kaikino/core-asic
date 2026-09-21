@@ -43,6 +43,7 @@ Three further choices set the architecture apart from a PIO clone:
 | SPI mode 0 master | `spi_master.pio` | Python slave, both directions |
 | I2C master, clock stretching | `i2c_master.pio` | ACKing Python slave |
 | I2C slave: EEPROM emulation from the FIFO | `i2c_eeprom.pio` | scripted Python master, repeated start, ACK/NACK |
+| SPI slave: flash emulation (READ ID, READ from the FIFO) | `spi_flash.pio` | scripted Python master |
 | JTAG IDCODE read | `jtag_idcode.pio` | 16-state TAP model |
 | SWD DPIDR read incl. JTAG-to-SWD switch | `swd_dpidr.pio` | SWD target model |
 | PS/2 device frames | `ps2_device.pio` | host monitor with parity |
@@ -54,7 +55,10 @@ Three further choices set the architecture apart from a PIO clone:
 | Sub-clock edge timing and glitch placement | `edge_timer.pio`, `glitch_pulse.pio` | fine times compared to the model exactly |
 
 Every program on the challenge's list (UART, SPI, I2C, both stretch goals,
-JTAG, SWD, PS/2, CAN) runs from loaded microcode on the same silicon.
+JTAG, SWD, PS/2, CAN) runs from loaded microcode on the same silicon, and
+the chip can sit on either side of a bus: as the master that probes a
+device, or as the device (I2C EEPROM, SPI flash, PS/2 keyboard, USB
+packet source) that a system under investigation talks to.
 
 ## How it is verified
 

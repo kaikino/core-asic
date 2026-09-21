@@ -578,3 +578,47 @@ class I2cMaster:
         self._sda_in = sda_in
         next(self._gen)
         return self.scl_low, self.sda_low
+
+
+class SpiMaster:
+    """Scripted SPI mode-0 master, one clock per step.
+
+    `script`: list of transactions, each a list of bytes to send (MISO
+    bytes are collected per transaction in `received`)."""
+
+    def __init__(self, script: list, half_period: int):
+        self.script = script
+        self.half = half_period
+        self.sck = 0
+        self.cs_n = 1
+        self.mosi = 0
+        self.received: list[list[int]] = []
+        self.done = False
+        self._gen = self._run()
+
+    def _run(self):
+        H = self.half
+        def hold(n):
+            for _ in range(n):
+                yield None
+        for txn in self.script:
+            got = []
+            self.cs_n = 0; yield from hold(H)
+            for byte in txn:
+                value = 0
+                for i in range(7, -1, -1):
+                    self.mosi = (byte >> i) & 1; yield from hold(H)
+                    self.sck = 1; value = (value << 1) | self._miso; yield from hold(H)
+                    self.sck = 0
+                got.append(value)
+            yield from hold(H)
+            self.cs_n = 1; yield from hold(2 * H)
+            self.received.append(got)
+        self.done = True
+        while True:
+            yield None
+
+    def step(self, miso: int) -> tuple[int, int, int]:
+        self._miso = miso
+        next(self._gen)
+        return self.sck, self.mosi, self.cs_n
