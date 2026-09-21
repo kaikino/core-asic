@@ -930,12 +930,13 @@ in the Icarus simulator.
   entries and DTC placement; `test_random.py` random programs on both
   engines with random pins, masks, FIFO and timing traffic, then compares
   the final status word and the whole trace buffer to the model.
-* `formal/proto.sby` asks SymbiYosys to *prove* nine properties written in
+* `formal/proto.sby` asks SymbiYosys to *prove* eleven properties written in
   the `ifdef FORMAL` block at the end of the top level: no contested pin is
   driven, drives stay inside permissions, a stopped engine drives nothing,
   the trace and FIFO counters stay in range, program writes only follow a
   PROGRAM frame while stopped, collisions latch the fault, and the timestamp
-  is free running. "Prove" means for all possible inputs, not just the ones
+  is free running, DTC taps and the CRC configuration change only through
+  their commands. "Prove" means for all possible inputs, not just the ones
   a test happened to try; the tool searches for a counterexample and, using
   induction, shows none exists.
 * The same cocotb suite runs on the iCE40 FPGA netlist (`make FPGA=yes`) and

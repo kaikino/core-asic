@@ -552,6 +552,13 @@ module tt_um_kaikino_protocol_emu #(
         // P8: the timestamp is free running unless the host resets it.
         if (!$past(cfg_request && cmd == CMD_RUN && cfg_word[5]))
           assert(timestamp == $past(timestamp) + 16'd1);
+        // P9: a DTC tap changes only through DTCW or a TIMING frame.
+        if (!$past(e_dtc_we[0] || e_dtc_we[1]) && !$past(cfg_request && cmd == CMD_TIMING))
+          assert(dtc_tap[0] == $past(dtc_tap[0]) && dtc_tap[1] == $past(dtc_tap[1]));
+        // P10: the CRC polynomial, initial value and final XOR change only through a CRC frame.
+        if (!$past(cfg_request && cmd == CMD_CRC))
+          assert(crc_poly == $past(crc_poly) && crc_init_val == $past(crc_init_val) &&
+                 crc_xorout == $past(crc_xorout));
       end
     end
   end
