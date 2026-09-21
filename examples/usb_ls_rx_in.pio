@@ -1,0 +1,49 @@
+; USB low-speed token receiver (engine 1): decodes SYNC and PID of each
+; incoming packet; on an IN token it raises GPIO5 so the transmitter program
+; on engine 0 (usb_ls_device.pio) answers with a DATA packet after EOP.
+; GPIO0 D+, GPIO1 D- (inputs), GPIO4 private scratch (last D+ sample),
+; GPIO5 handshake to engine 0 (this engine drives it; engine 0 reads it).
+;
+; Bits are sampled 13 clocks after the first K edge and then every 27
+; clocks (1.5 Mbit/s at 40 MHz).  NRZI: same level as last sample = 1,
+; change = 0.  Bits are accumulated MSB first, so the PID compares against
+; its bit-reversed value (IN 0x69 -> 0x96).  Stuffed bits are not expected
+; inside SYNC or a PID and are not removed here.
+        movi  r1, 0x00
+        out   r1, UIO, 0x30
+        movi  r1, 0x30
+        out   r1, UIO_OE, 0x30       ; drive GPIO5 and GPIO4
+idle:   setp  UIO, 5, 0
+        wait  LOW, GPIO0             ; J (D+ low) before a packet
+        wait  HIGH, GPIO0            ; first K: SYNC starts
+        setp  UIO, 4, 1              ; last sample = K
+        delay 26                     ; first sample lands mid-way through bit 1
+        movi  r1, 15                 ; 7 more SYNC bits, then 8 PID bits
+        movi  r0, 0
+bit:    delay 9                      ; one iteration = 27 clocks on every path
+        jph   GPIO0, hi
+        jph   GPIO4, chg             ; now low, was high: change -> 0
+        movi  r3, 1                  ; low, was low: 1
+        jmp   acc
+chg:    setp  UIO, 4, 0
+        movi  r3, 0
+        jmp   acc
+hi:     jpl   GPIO4, chg1            ; now high, was low: change -> 0
+        movi  r3, 1
+        jmp   acc
+chg1:   setp  UIO, 4, 1
+        movi  r3, 0
+        nop
+acc:    add   r0, r0
+        or    r0, r3
+        delay 9
+        djnz  r1, bit
+        movi  r3, 0x96               ; IN, bit reversed
+        xor   r3, r0
+        jnz   r3, idle               ; not an IN token (or SYNC misread)
+eop:    wait  FALL, GPIO1            ; D- fell: K or SE0?
+        jph   GPIO0, eop             ; D+ high: K, keep waiting
+        wait  HIGH, GPIO1            ; SE0 ended: back to J
+        setp  UIO, 5, 1              ; tell engine 0 to answer
+        delay 60
+        jmp   idle

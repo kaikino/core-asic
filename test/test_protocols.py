@@ -366,3 +366,57 @@ async def test_spi_flash_emulation(dut):
     assert master.received[1][4:] == data, [hex(x) for x in master.received[1]]
     entries = await read_trace(h, 2)
     assert [e & 0xFF for e in entries] == [0x9F, 0x03]
+
+
+@cocotb.test()
+async def test_usb_ls_in_token_response(dut):
+    """Engine 1 decodes a host IN token; engine 0 answers with a DATA0 packet."""
+    from proto_ref import cmd_crc_config, cmd_fifo
+    from protocols import UsbLsDecoder, usb_ls_token_waveform
+    h = await setup(dut)
+    bit_clocks = 27
+    dec = UsbLsDecoder(bit_clocks)
+    token = usb_ls_token_waveform(pid=0x69, addr=0x00, endp=0x0, bit_clocks=bit_clocks)
+    pos = {"i": 0}
+
+    def bus(hh):
+        oe, o = hh.uio_oe, hh.uio_out
+        if oe & 0x03:                                   # device drives the pair
+            dp, dm = o & 1, (o >> 1) & 1
+        else:
+            dp, dm = token[pos["i"]] if pos["i"] < len(token) else (0, 1)
+        pos["i"] += 1
+        dec.step(dp, dm)
+        hh.uio_in = (hh.uio_in & ~0x03) | (dm << 1) | dp
+    h.uio_in = 0x02
+    for f in cmd_crc_config(0xA001, 0xFFFF, 0xFFFF):
+        await h.xfer(f)
+    payload = bytes([0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08])
+    await h.xfer(cmd_fifo(reset=True))
+    for b in payload:
+        await h.xfer(cmd_fifo(b, push=True))
+    await h.load(0, example("usb_ls_device.pio"))
+    await h.load(1, example("usb_ls_rx_in.pio"))
+    await h.xfer(cmd_perm(0, uio_mask=0xC3, uo_mask=0))
+    await h.xfer(cmd_perm(1, uio_mask=0x30, uo_mask=0))
+    await h.xfer(cmd_run(arm=True, start0=True, start1=True))
+    await h.xfer(cmd_mbox(0, 0xC3))                      # DATA0 PID
+    pos["i"] = -60                                       # a little idle before the token
+    token = [(0, 1)] * 60 + token
+    pos["i"] = 0
+    h.after_tick = bus
+    await h.tick(len(token) + 160 * bit_clocks)
+    h.after_tick = None
+    assert len(dec.packets) >= 2, dec.packets
+    tok, resp = dec.packets[0], dec.packets[1]
+    assert tok["pid"] == 0x69, tok
+    assert resp["sync_ok"] and resp["pid"] == 0xC3 and not resp["stuff_error"], resp
+    assert resp["payload"][:8] == payload, resp["payload"].hex()
+    c = 0xFFFF
+    for byte in payload:
+        c ^= byte
+        for _ in range(8):
+            c = (c >> 1) ^ (0xA001 if c & 1 else 0)
+    c ^= 0xFFFF
+    assert list(resp["payload"][8:10]) == [c & 0xFF, c >> 8], resp["payload"].hex()
+    dut._log.info(f"token {tok['pid']:#x} -> response {resp}")
