@@ -53,7 +53,7 @@ Three further choices set the architecture apart from a PIO clone:
 | Protocol-aware trigger: I2C address match starts the logic analyser | `i2c_watch.pio` | scripted master, captured edges all follow the match |
 | 10 Mbit/s Manchester Ethernet frame with FCS, and receiver | `manchester_tx.pio`, `manchester_rx.pio` | software decode and the second engine |
 | 10BASE-T link pulses | `link_pulse.pio` | |
-| Sub-clock edge timing and glitch placement | `edge_timer.pio`, `glitch_pulse.pio` | fine times compared to the model exactly |
+| Sub-clock edge timing and glitch placement | `edge_timer.pio`, `glitch_pulse.pio` | edges at 1/6/12/20 ns after the clock read 107/84/58/22 stages, exactly as modelled; the glitch appears at its tap |
 
 Every program on the challenge's list (UART, SPI, I2C, both stretch goals,
 JTAG, SWD, PS/2, CAN) runs from loaded microcode on the same silicon, and

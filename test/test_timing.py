@@ -127,3 +127,63 @@ async def test_engine_sets_dtc_tap(dut):
     await h.start(0)
     await h.wait_idle(0)
     assert h.model.dtc_tap[1] == 120
+
+
+@cocotb.test()
+async def test_edge_timer_measures_offsets(dut):
+    """edge_timer.pio reports different fine times for edges at different offsets."""
+    from proto_ref import cmd_mbox, cmd_run
+    h = await setup(dut)
+    await h.xfer(cmd_tdc(0, 8))                 # TARGET_IN0
+    await h.load(0, example("edge_timer.pio", LIMIT=60))
+    await h.xfer(cmd_run(arm=True))
+    await h.start(0)
+    results = []
+    for offset_ps in (1000, 6000, 12000, 20000):
+        h.edge_offset_ps = offset_ps
+        h.ui_target &= ~1
+        await h.tick(4)
+        h.ui_target |= 1                        # rising edge on IN0 at this offset
+        await h.tick(6)
+        h.edge_offset_ps = 1000
+        await h.tick(4)
+        await h.xfer(cmd_run(ack_rx0=True))
+        results.append(((await h.read(READ_MBOX)) & 0xFF, fine_count(CLOCK_PS - offset_ps)))
+    dut._log.info(f"(measured, expected) fine times: {results}")
+    assert all(m == e for m, e in results), results
+    if TDLY_PS:
+        assert results[0][0] > results[1][0] > results[2][0] > results[3][0], "later edges read smaller counts"
+    entries = await read_trace(h, 4)
+    kinds = [e & 0xFF for e in entries]
+    assert kinds == [0xEE, 0xEE, 0xE0, 0xE0], kinds   # early/late relative to LIMIT=60 stages
+
+
+@cocotb.test()
+async def test_glitch_pulse_placement(dut):
+    """glitch_pulse.pio emits one clock-wide pulse after TRIGGER_IN, shifted by the DTC tap."""
+    from proto_ref import cmd_mbox, cmd_run
+    h = await setup(dut)
+    tap = 40
+    await h.xfer(cmd_dtc(0, pin=0, enable=True, tap=0))
+    await h.load(0, example("glitch_pulse.pio"))
+    await h.start(0)
+    await h.xfer(cmd_mbox(0, tap))
+    await h.tick(20)
+    h.ui_target |= 0b10000                      # TRIGGER_IN rises
+    seen = []
+    for _ in range(12):
+        await h.tick(1)
+        seen.append((h.uo_out >> 1) & 1)
+        if TDLY_PS:
+            await Timer(tap * TDLY_PS + 2 * TDLY_PS, unit="ps")
+            seen.append(((int(dut.uo_out.value) >> 1) & 1, "late"))
+            await Timer(1, unit="ps")
+    status = await h.read(READ_STATUS)
+    assert status & 0x04, "DONE flag set after the pulse (the program loops for the next trigger)"
+    await h.stop(0)
+    # At the clock edges the pin looks like the model's delayed view; between
+    # edges, after tap*stage, the pulse appears shifted by the tap.
+    if TDLY_PS:
+        late = [v for v in seen if isinstance(v, tuple)]
+        assert (1, "late") in late, seen
+    assert h.model.dtc_tap[0] == tap

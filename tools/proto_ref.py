@@ -341,6 +341,7 @@ class Chip:
         self.cal_toggle = 0
         self.uo_history = [0, 0, 0]        # uo_target after the last three edges, newest first
         self.pins_raw_prev = 0
+        self.pad_edge_offset_ps = PAD_EDGE_OFFSET_PS   # when the harness changed the pads this cycle
         self.fifo = []          # bytes in order, head first
         self.fcs_mode = False
         self.fcs_done = False
@@ -534,7 +535,7 @@ class Chip:
             elif src <= 12:
                 value = (pins_raw >> src) & 1
                 changed = value != ((self.pins_raw_prev >> src) & 1)
-                age = CLOCK_PS - PAD_EDGE_OFFSET_PS if changed else self.tdc_age[c] + CLOCK_PS
+                age = CLOCK_PS - self.pad_edge_offset_ps if changed else self.tdc_age[c] + CLOCK_PS
             else:
                 value, age = 0, self.tdc_age[c] + CLOCK_PS
             self.tdc_age[c] = min(age, 10 ** 9)

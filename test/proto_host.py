@@ -32,6 +32,7 @@ class Harness:
         self.mosi = 0
         self.cs_n = 1
         self.after_tick = None  # optional callback(harness) run after each edge
+        self.edge_offset_ps = 1000  # pads change this long after the clock edge
         self._scheduled = False  # RTL cfg_request seen after the previous edge
         self._due = []          # cycle numbers at which queued frames take effect
         # Internal probes exist in RTL simulation only; netlist runs rely on
@@ -72,6 +73,7 @@ class Harness:
         for _ in range(n):
             self.drive()  # pads carry exactly what the model is told
             uio_in, ui_in = self.uio_in, self.ui_in
+            self.model.pad_edge_offset_ps = self.edge_offset_ps
             await RisingEdge(self.dut.clk)
             await ReadOnly()
             # The 32nd SCK rising edge driven before edge E0 is seen by the
@@ -92,7 +94,7 @@ class Harness:
                 self.check()
             # Pads are driven exactly 1 ns after the edge (PAD_EDGE_OFFSET_PS in
             # the model) so the TDC fine times of input edges are predictable.
-            await Timer(1, unit="ns")
+            await Timer(self.edge_offset_ps, unit="ps")
             # A driven GPIO pad reads back its own value; peers may override
             # the pins they drive in after_tick.
             driven = self.uio_oe
