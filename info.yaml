@@ -3,7 +3,7 @@ project:
   title:        "Programmable Protocol Emulator"      # Project title
   author:       "kaikino"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Dual-engine programmable PIO protocol emulator with safe shared GPIO and trace capture"
+  description:  "Two PIO engines speak UART to Ethernet from microcode: proven-safe shared pins, hardware CRC, 0.2 ns edge timing"
   language:     "SystemVerilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     40000000
 
